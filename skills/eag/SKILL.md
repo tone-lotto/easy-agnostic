@@ -28,6 +28,8 @@ Run `eag <command> --help` for every flag. Exit codes everywhere:
 | make every repo agnostic at once | `eag adopt claude --all-projects` |
 | check the wiring (hooks, trust, secrets, skills) | `eag doctor` (`--fix` repairs what is safe to repair) |
 | share project instructions in both directions | `eag instructions --dry-run`, then `eag instructions` |
+| share only this repo's skills | `eag adopt skills --scope project --dry-run`, then without `--dry-run` |
+| distinguish project skills from inherited user skills | `eag skills ls --scope project --json` |
 | resolve conflicting instruction files explicitly | `eag instructions --prefer agents` or `--prefer claude` |
 
 ## Rules that keep you out of trouble

@@ -76,10 +76,12 @@ function dedupeSkills(srcDir, dupDir, fix, out, agent) {
 
 export async function run(_args, flags) {
   const fix = !!flags.fix;
+  const scope = flags.scope ?? 'all';
+  if (!['user', 'project', 'all'].includes(scope)) throw new Error('--scope must be user, project or all');
   const root = projectRoot();
   const out = [];
   try {
-    await checks(fix, root, out);
+    await checks(fix, root, out, scope);
   } catch (e) {
     // Findings are collected and printed at the end, so a throw halfway through used to
     // swallow everything doctor had already found. Report the abort as one more finding.
@@ -94,7 +96,7 @@ export async function run(_args, flags) {
   return bad ? 1 : 0;
 }
 
-async function checks(fix, root, out) {
+async function checks(fix, root, out, scope) {
   // source
   const user = loadSource(scopePaths('user'));
   out.push(user.hasMcp ? { level: 'ok', msg: `source: ${user.paths.mcp} (${Object.keys(user.servers).length} servers)` } : { level: 'bad', msg: `source missing: ${user.paths.mcp}. Run: eag init` });
@@ -178,12 +180,15 @@ async function checks(fix, root, out) {
 
   // claude
   out.push(claude.available() ? { level: 'ok', msg: 'claude CLI available' } : { level: 'warn', msg: 'claude CLI not on PATH; user-scope apply needs it' });
-  linkSkills(path.join(EAG_HOME, 'skills'), path.join(CLAUDE_CONFIG_DIR, 'skills'), fix, out);
-  dedupeSkills(path.join(EAG_HOME, 'skills'), path.join(CODEX_HOME, 'skills'), fix, out, 'Codex');
+  linkSkills(path.join(EAG_HOME, 'skills'), path.join(CLAUDE_CONFIG_DIR, 'skills'), fix && scope !== 'project', out);
+  dedupeSkills(path.join(EAG_HOME, 'skills'), path.join(CODEX_HOME, 'skills'), fix && scope !== 'project', out, 'Codex');
   // From $HOME the "project" .agents/skills IS the user's shared dir: linking it again from
   // there reported every skill twice.
-  if (!scopePaths('project', root).collides && exists(path.join(root, '.agents', 'skills'))) linkSkills(path.join(root, '.agents', 'skills'), path.join(root, '.claude', 'skills'), fix, out);
-  const instructions = syncInstructions(root, { dryRun: !fix });
+  if (scope !== 'user' && !scopePaths('project', root).collides && exists(path.join(root, '.agents', 'skills'))) {
+    if (fix) skillsMod.locations({ scope: 'project', root });
+    linkSkills(path.join(root, '.agents', 'skills'), path.join(root, '.claude', 'skills'), fix, out);
+  }
+  const instructions = scope === 'user' ? { op: 'skipped' } : syncInstructions(root, { dryRun: !fix });
   if (instructions.op !== 'skipped') out.push({
     level: instructions.op === 'conflict' ? 'bad' : instructions.op === 'noop' ? 'ok' : fix ? 'fixed' : 'warn',
     msg: `instructions: ${instructions.message}${!fix && ['sync', 'enroll'].includes(instructions.op) ? ' (eag instructions applies this)' : ''}`,

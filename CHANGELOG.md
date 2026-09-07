@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.0 — 2026-09-07
+
+- Add `eag adopt skills --scope project` to share skills within a repository and create relative Claude links without moving global skills. `setup --project` now includes project skill adoption.
+- Add `eag skills ls --scope user|project [--json]` to distinguish shared, agent-specific, linked, and inherited user skills, with conflict and same-name indicators.
+- Add scoped doctor repairs; `setup --project` no longer repairs global skill directories.
+- Preserve both conflicting project copies, refuse project skill directories that redirect to global locations, and recheck duplicates before removing them.
+
 ## 0.8.0 — 2026-09-07
 
 - Add `eag instructions [--dry-run] [--prefer agents|claude] [--json]` for bidirectional project-root AGENTS.md / CLAUDE.md sync. Creates a missing counterpart, propagates single-sided edits, and refuses divergent edits or deletions until explicitly resolved.

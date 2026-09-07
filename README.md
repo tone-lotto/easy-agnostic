@@ -77,6 +77,21 @@ eag doctor --fix              # repairs skill wiring and syncs project instructi
 eag instructions --dry-run    # preview bidirectional AGENTS.md / CLAUDE.md sync
 ```
 
+## Project-only skills
+
+```bash
+eag adopt skills --scope project --dry-run
+eag adopt skills --scope project
+eag skills ls --scope project
+eag skills ls --scope project --json
+```
+
+Project adoption moves skills from this repo's `.claude/skills` and `.codex/skills` into `.agents/skills`, and creates relative links in `.claude/skills`. Existing shared project skills get Claude links too. `eag setup --project` includes this step. Commit the skill directories and links to share them with collaborators.
+
+Global skills are never moved into a project. Listing reports user-scope entries separately as inherited, identifies shared versus agent-specific locations, and flags same-scope conflicts and names also present globally. It is a filesystem inventory, not a guarantee of each running agent's discovery or precedence rules. Different project skills with the same name stay untouched; rename or reconcile them before adoption. Project directory symlinks that could redirect writes outside the repo are refused. The default for both commands remains `--scope user`.
+
+`eag doctor --fix --scope project` limits repairs to the project while still reporting global diagnostics. `setup --project` uses this scope automatically, so its doctor step does not change global skill directories.
+
 ## Bidirectional project instructions
 
 Run `eag instructions` in a project to keep root-level `AGENTS.md` and `CLAUDE.md` as mirrored files. This works without an MCP configuration. `eag doctor --fix` (including during setup) also enables this for the current project.

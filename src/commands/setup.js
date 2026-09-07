@@ -40,9 +40,7 @@ export async function run(_args, flags) {
   await step('4/8 apply', () => applyRun([], { scope }));
   // Skills only flow outward from ~/.agents/skills; anything one agent keeps to itself is
   // moved there so the others get it. A name clash is reported, never decided.
-  await step('5/8 adopt skills', () => (scope === 'project'
-    ? console.log(`  ${c.dim('skipped in project scope')}`)
-    : adoptRun(['skills'], {})));
+  await step('5/8 adopt skills', () => adoptRun(['skills'], { scope }));
   // The one place the promise does not hold on its own: servers Claude keeps per project in
   // ~/.claude.json, which no other agent can see. This writes inside repositories the user
   // did not name, so it reports every one and --no-projects turns it off.
@@ -55,7 +53,7 @@ export async function run(_args, flags) {
   await step('7/8 hook install', () => (scope === 'project'
     ? console.log(`  ${c.dim('skipped: sync-on-launch is machine-level; run eag hook install once')}`)
     : hookRun(['install'], {})));
-  await step('8/8 doctor --fix', () => doctorRun([], { fix: true }));
+  await step('8/8 doctor --fix', () => doctorRun([], { fix: true, scope: scope === 'project' ? 'project' : 'all' }));
 
   console.log(`\n${ok ? c.ok('setup done') : c.warn('setup finished; see the warnings/errors above')}. ${c.dim('eag status')} shows drift any time, ${c.dim('eag mcp add')} to add a server.`);
   return ok ? 0 : 1;

@@ -498,6 +498,14 @@ printf '@AGENTS.md\n\nClaude-only instructions\n' > "$SETUP_S/proj/CLAUDE.md"
   grep -q 'Shared edit from Claude' AGENTS.md || { echo "FAIL: Claude edits did not sync to AGENTS" >&2; exit 1; }
   grep -q 'Claude-only' AGENTS.md && { echo "FAIL: Claude-only content leaked into shared instructions" >&2; exit 1; }
   A instructions --dry-run >/dev/null
+  mkdir -p .codex/skills/project-demo
+  printf -- '---\nname: project-demo\ndescription: Project fixture\n---\nProject-only instructions\n' > .codex/skills/project-demo/SKILL.md
+  A adopt skills --scope project --dry-run >/dev/null
+  [ ! -e .agents/skills/project-demo ] || { echo "FAIL: project skills preview wrote files" >&2; exit 1; }
+  A adopt skills --scope project >/dev/null
+  [ -f .agents/skills/project-demo/SKILL.md ] && [ -L .claude/skills/project-demo ] || { echo "FAIL: project skill was not shared and linked" >&2; exit 1; }
+  [ ! -e "$EAG_HOME/skills/project-demo" ] || { echo "FAIL: project skill leaked into user scope" >&2; exit 1; }
+  A skills ls --scope project --json | node -e 'let text="";process.stdin.on("data",x=>text+=x);process.stdin.on("end",()=>{const rows=JSON.parse(text).skills;if(!rows.some(x=>x.name==="project-demo"&&x.scope==="project"&&x.origin==="shared"))process.exit(1)})'
 )
 rm -rf "$SETUP_S"
 

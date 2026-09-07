@@ -15,7 +15,10 @@ Usage: eag <command> [options]
   init [--project]                      create the source files and detect installed agents
   adopt <claude|codex> [--scope user|project] [--dry-run] [--force]
                                         import what an agent has today into the source
-  adopt skills [--dry-run]              move skills only one agent has into ~/.agents/skills, where every agent reads them
+  adopt skills [--scope user|project] [--dry-run]
+                                        share skills within the selected scope
+  skills ls [--scope user|project] [--json]
+                                        list shared, agent-specific, and inherited user skills
   adopt claude --all-projects [--dry-run] [--keep-local]
                                         make every project agnostic: Claude keeps per-project servers to itself in
                                         ~/.claude.json, so this moves each one into that repo's own .mcp.json, which
@@ -77,7 +80,8 @@ const COMMAND_FLAGS = {
   secret: ['value', 'from-env'],
   env: [],
   instructions: ['dry-run', 'prefer', 'json'],
-  doctor: ['fix', 'json'],
+  skills: ['scope', 'json'],
+  doctor: ['fix', 'json', 'scope'],
   update: ['check', 'force'],
 };
 
@@ -86,6 +90,10 @@ const COMMAND_FLAGS = {
 // flag, its value format, and the exit codes.
 const EXIT = 'Exit codes: 0 nothing to do or done · 1 error · 2 drift (something to apply) · 3 conflict (a native edit eag refuses to overwrite)';
 const USAGE = {
+  skills: `eag skills ls [--scope user|project] [--json]
+  List skill locations, shared/agent-specific origins, links and same-scope conflicts.
+  Project scope also lists inherited user skills separately; it never moves them.
+  Default scope: user. Listing is read-only; exit 1 for invalid input.`,
   instructions: `eag instructions [--dry-run] [--prefer agents|claude] [--json]
   Enable or sync mirrored AGENTS.md and CLAUDE.md at the current project root.
   Creates the missing counterpart on first use. Later edits flow in either direction.
@@ -101,14 +109,16 @@ const USAGE = {
   Create the source files (~/.agents/mcp.json + agents.json, or ./.mcp.json) and detect installed agents.`,
   adopt: `eag adopt <claude|codex> [--scope user|project] [--dry-run] [--force]
 eag adopt claude --all-projects [--dry-run] [--keep-local]
-eag adopt skills [--dry-run]
+eag adopt skills [--scope user|project] [--dry-run]
   Import what an agent has today into the source. Literal credentials are moved to the secret store and
   replaced with \${NAME}. An entry already in the source with different content is kept (--force replaces it).
   --all-projects moves every per-project Claude server into that repo's own .mcp.json so Codex and Pi see it
   too; --keep-local leaves the original copy in ~/.claude.json.
   'adopt skills' moves a skill that only one agent has (~/.claude/skills, ~/.codex/skills) into ~/.agents/skills,
   which Codex reads directly and doctor links into Claude Code. Two different skills sharing a name are
-  reported and left alone (exit 2).`,
+  reported and left alone (exit 2).
+  --scope project moves only .claude/skills and .codex/skills into .agents/skills in the current repo,
+  and creates Claude links. Global skills are never moved. Project skill directory symlinks are refused.`,
   status: `eag status [--scope user|project|all] [--exit-code] [--quiet] [--json]
   Drift between the source, the last apply and each agent. --quiet hides in-sync and foreign entries.
   --exit-code makes the exit status meaningful for scripts. --json prints one object per target.
@@ -143,7 +153,8 @@ eag secret ls | rm <NAME>
   Install the latest version in place (npm i -g) and refresh the launcher, shell file and skill. --check only
   reports. Every eag apply also checks the registry at most once a day and, for a global install, updates in
   the background unless agents.json has "autoUpdate": false.`,
-  doctor: `eag doctor [--fix] [--json]
+  doctor: `eag doctor [--fix] [--scope user|project|all] [--json]
+  --scope limits repairs, not diagnostic reads; default all. Project scope never repairs global skills.
   Wiring checks: skills symlinks, instruction sync, Codex trust, Pi adapter, hook trust, secrets that are set but not
   exported, projects only Claude can see, literal credentials in the source. --fix repairs symlinks, dedupes
   identical skill copies and syncs AGENTS.md with CLAUDE.md bidirectionally. Exit 1 when there is a problem, 0 otherwise.`,
@@ -166,6 +177,7 @@ export async function main(argv) {
     secret: () => import('./commands/secret.js'),
     env: () => import('./commands/env.js'),
     instructions: () => import('./commands/instructions.js'),
+    skills: () => import('./commands/skills.js'),
     doctor: () => import('./commands/doctor.js'),
     update: () => import('./commands/update.js'),
   }[cmd];
