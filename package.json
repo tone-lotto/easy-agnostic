@@ -1,0 +1,48 @@
+{
+  "name": "easy-agnostic",
+  "version": "0.1.0",
+  "description": "Easy Agnostic: one source, many agents. Sync MCP servers (and keep skills/instructions wired) across Claude Code, Codex and Pi.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "claude-code",
+    "codex",
+    "pi",
+    "coding-agents",
+    "cli",
+    "sync",
+    "secrets"
+  ],
+  "homepage": "https://github.com/tone-lotto/easy-agnostic#readme",
+  "bugs": {
+    "url": "https://github.com/tone-lotto/easy-agnostic/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tone-lotto/easy-agnostic.git"
+  },
+  "license": "MIT",
+  "author": "Matheus Tonelotto",
+  "type": "module",
+  "bin": {
+    "eag": "bin/eag.js"
+  },
+  "files": [
+    "bin",
+    "src"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "e2e": "scripts/e2e.sh"
+  },
+  "dependencies": {
+    "smol-toml": "^1.3.0"
+  }
+}
