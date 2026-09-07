@@ -114,11 +114,26 @@ export function writeInit(bins = wrappableBins(), { dryRun = false } = {}) {
   return { file: INIT_FILE, changed: true, created: current === null };
 }
 
+// Which binaries the file on disk already wraps. Needed because a refresh can run from an
+// environment that cannot see them all.
+export function binsInFile(file = INIT_FILE) {
+  if (!exists(file)) return [];
+  const out = [];
+  for (const m of fs.readFileSync(file, 'utf8').matchAll(/^ {2}([A-Za-z0-9_-]+)\(\) \{ __eag_sync;/gm)) out.push(m[1]);
+  return out;
+}
+
 // Refresh an init file that already exists. Never creates one: someone who has not run
 // `eag hook install` has not asked eag to touch their shell.
+//
+// Only ever ADDS. A refresh can be triggered by the SessionStart launcher, which runs with
+// the minimal PATH a GUI launch has — no claude, no codex — and rebuilding the list from
+// that would quietly delete every wrapper and stop terminal launches syncing. Dropping a
+// wrapper is therefore only ever done by an explicit `eag hook install`.
 export function refreshInit() {
   if (!exists(INIT_FILE)) return null;
-  const r = writeInit();
+  const bins = [...new Set([...binsInFile(), ...wrappableBins()])].sort();
+  const r = writeInit(bins);
   return r.changed ? r : null;
 }
 

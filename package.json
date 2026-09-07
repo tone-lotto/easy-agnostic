@@ -1,6 +1,6 @@
 {
   "name": "easy-agnostic",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Easy Agnostic: one source, many agents. Sync MCP servers (and keep skills/instructions wired) across Claude Code, Codex and Pi.",
   "keywords": [
     "mcp",

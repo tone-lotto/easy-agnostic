@@ -304,9 +304,40 @@ printf '#!/bin/sh\nprintf "REAL codex ran\\n"\n' > "$SHELLTEST/bin/codex"; chmod
   A mcp rm e2e-wrapped >/dev/null
   A apply --scope user --target codex >/dev/null 2>&1 || true
 )
+# The other half of sync-on-launch: an agent opened from an app or an IDE reads no rc, so
+# it needs its own SessionStart hook. The launcher that hook runs has to work in the
+# environment such a launch actually has: no shell rc and, on macOS, no node on PATH.
+printf '{\n  "model": "opus",\n  "hooks": { "Stop": [ { "hooks": [ { "type": "command", "command": "echo theirs" } ] } ] }\n}\n' > "$CLAUDE_CONFIG_DIR/settings.json"
+A hook install >/dev/null
+[ -x "$EAG_HOME/bin/eag-sync" ] || { echo "FAIL: hook install did not create an executable launcher" >&2; exit 1; }
+sh -n "$EAG_HOME/bin/eag-sync" || { echo "FAIL: the launcher is not valid POSIX sh" >&2; exit 1; }
+node -e '
+const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+if (s.model !== "opus") { console.error("FAIL: hook install clobbered an unrelated settings key"); process.exit(1); }
+if (!s.hooks.Stop) { console.error("FAIL: hook install dropped another tool’s hook"); process.exit(1); }
+const ours = (s.hooks.SessionStart || []).flatMap((g) => g.hooks || []).filter((h) => /eag-sync/.test(h.command || ""));
+if (ours.length !== 1) { console.error(`FAIL: expected exactly one eag SessionStart entry, got ${ours.length}`); process.exit(1); }
+' "$CLAUDE_CONFIG_DIR/settings.json"
+
+# Run the launcher the way a GUI-launched agent would: nothing inherited, minimal PATH.
+A mcp add e2e-gui --url https://example.com/gui >/dev/null
+out="$(env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME="$HOME" \
+  EAG_HOME="$EAG_HOME" CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" CODEX_HOME="$CODEX_HOME" \
+  PI_CODING_AGENT_DIR="$PI_CODING_AGENT_DIR" EAG_SECRET_SERVICE="$EAG_SECRET_SERVICE" \
+  EAG_SHELL_RC="$EAG_SHELL_RC" /bin/sh "$EAG_HOME/bin/eag-sync" 2>&1)"
+[ -z "$out" ] || { echo "FAIL: the launcher printed something; a hook must be silent:" >&2; printf '%s\n' "$out" >&2; exit 1; }
+grep -q '\[mcp_servers.e2e-gui\]' "$CODEX_HOME/config.toml" || { echo "FAIL: the launcher did not sync with a minimal environment" >&2; exit 1; }
+A mcp rm e2e-gui >/dev/null; apply_s --scope user --target codex >/dev/null
+
 A hook uninstall >/dev/null
 grep -q 'easy-agnostic' "$S/shellrc" && { echo "FAIL: hook uninstall left its block in $S/shellrc" >&2; exit 1; }
 [ -f "$EAG_HOME/shell-init.sh" ] && { echo "FAIL: hook uninstall left the generated file behind" >&2; exit 1; }
+[ -f "$EAG_HOME/bin/eag-sync" ] && { echo "FAIL: hook uninstall left the launcher behind" >&2; exit 1; }
+node -e '
+const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+if (s.model !== "opus" || !s.hooks || !s.hooks.Stop) { console.error("FAIL: hook uninstall removed more than its own entry"); process.exit(1); }
+if (s.hooks.SessionStart) { console.error("FAIL: hook uninstall left its SessionStart entry behind"); process.exit(1); }
+' "$CLAUDE_CONFIG_DIR/settings.json"
 
 # `eag setup` = init + adopt claude + adopt codex + apply + doctor --fix in one call. Prove
 # it converges from scratch, in its own disposable sub-sandbox with a minimal fixture (not

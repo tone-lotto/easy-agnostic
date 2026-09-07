@@ -32,7 +32,8 @@ src/paths.js            all paths; honours EAG_HOME, CLAUDE_CONFIG_DIR, CODEX_HO
 src/source.js           load/save mcp.json + agents.json, validation, per-server policy helpers
 src/secrets.js          keychain (macOS `security`), secret-tool (Linux), .secrets.env fallback
 src/state.js            last-apply snapshot per target (.state/<target>.json)
-src/shell.js            generated ~/.agents/shell-init.sh + rc wiring for sync-on-launch
+src/shell.js            generated ~/.agents/shell-init.sh + rc wiring (terminal launches)
+src/hooks.js            ~/.agents/bin/eag-sync launcher + the agents' own session hooks (app/IDE launches)
 src/merge.js            the 3-way merge; pure function, no I/O
 src/plan.js             builds a plan per target, applies it; TARGETS registry
 src/adapters/codex.js   read/render/write managed block in config.toml; toSource for adopt
@@ -88,7 +89,13 @@ Rules that make it survivable:
 - **No secret is written into the generated file.** It runs `eval "$(command eag env)"` at shell start; the values stay in the secret store.
 - **Everything is guarded on `command -v eag`**, so uninstalling the package cannot break a shell.
 - **`--quiet` reports a problem once.** It runs on every agent launch, so a chronic problem (an entry `claude mcp add-json` refuses, an unresolved conflict) would otherwise print the same line forever. `apply.js` keeps the last reported set in `.state/quiet.json` and prints only when it changes.
-- **The shell only covers terminal launches.** A GUI or IDE launch reads neither the rc nor the exported variables; that is also why `claude.secrets` defaults to `literal`. Native hooks for that path are phase 1.
+- **A refresh only ever adds a wrapper, never removes one.** The SessionStart launcher runs `eag apply` with the minimal PATH a GUI launch has, where no agent binary is visible; rebuilding the list from that would delete every wrapper and stop terminal launches syncing. Only an explicit `eag hook install` shrinks the list.
+
+The other half, for launches that never see a shell (`src/hooks.js`):
+- **Claude Code gets a `SessionStart` hook** merged into `~/.claude/settings.json`. That file is the user's, so eag adds exactly one entry, leaves every other key and any other tool's hooks alone, backs up before writing, and refuses outright if the file parses to something that is not an object.
+- **The hook runs `~/.agents/bin/eag-sync`, never `eag`.** A GUI-launched agent on macOS has `PATH=/usr/bin:/bin:/usr/sbin:/sbin` and no `node`, so the launcher is POSIX sh with the interpreter and entry point baked in as absolute paths, plus a fallback search. It is silent and exits 0 unconditionally: anything it prints reaches the agent session, and a failure must never stop an agent from opening.
+- **Codex is not hooked yet.** It has a full lifecycle hook system (`hooks.json`, `SessionStart`), but a newly written hook is "New hook - review required" until approved in `/hooks`, and `--dangerously-bypass-hook-trust` is not something eag should ever tell anyone to run. Codex opened from the ChatGPT app therefore syncs on the next terminal launch.
+- **`claude.secrets` defaults to `literal`** for the same GUI reason: a launchd environment has none of the shell's exports.
 
 ## Conventions
 

@@ -9,6 +9,7 @@ import { exists, refsIn, looksLikeSecret, mapStrings, writeFileAtomic, backup, c
 import { resolveSecret, backendName } from '../secrets.js';
 import * as pi from '../adapters/pi.js';
 import * as shell from '../shell.js';
+import * as hooks from '../hooks.js';
 import * as claude from '../adapters/claude.js';
 
 const MARK = { ok: c.ok('✓'), warn: c.warn('!'), bad: c.bad('✗'), info: c.dim('·'), fixed: c.ok('✓ fixed') };
@@ -94,6 +95,13 @@ async function checks(fix, root, out) {
   } else {
     out.push({ level: 'warn', msg: `shell: ${rc} neither exports \${NAME} values nor syncs on launch. Run: eag hook install` });
   }
+  // The other half of sync-on-launch: an agent opened from a desktop app or an IDE reads no
+  // rc, so only its own session hook reaches it.
+  const cl = hooks.claudeState();
+  const launcherOk = exists(hooks.LAUNCHER) && fs.readFileSync(hooks.LAUNCHER, 'utf8') === hooks.renderLauncher();
+  if (cl.current && launcherOk) out.push({ level: 'ok', msg: 'app/IDE launches: Claude Code SessionStart hook installed' });
+  else if (cl.installed && !launcherOk) out.push({ level: 'bad', msg: `Claude Code runs a SessionStart hook pointing at ${hooks.LAUNCHER}, which is missing or stale. Run: eag hook install` });
+  else if (claude.available()) out.push({ level: 'warn', msg: 'app/IDE launches do not sync: no Claude Code SessionStart hook. Run: eag hook install' });
   if (notExported.length) out.push({ level: 'warn', msg: `${notExported.join(', ')} resolve from the ${backendName()} store but are not exported in this shell; the agents expand \${NAME} from their own environment, so run  eval "$(eag env)"  and restart them` });
 
   // claude
