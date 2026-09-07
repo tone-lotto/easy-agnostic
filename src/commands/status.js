@@ -1,22 +1,23 @@
 import { projectRoot, scopePaths } from '../paths.js';
 import { buildPlan, targetsForScope, TARGETS } from '../plan.js';
 import { hasDrift, summarize } from '../merge.js';
-import { c, exists, redactKnown } from '../util.js';
+import { c, exists, refsIn } from '../util.js';
+import { redactConfig } from '../redact.js';
 import { listSecrets, resolveSecret } from '../secrets.js';
 import * as claude from '../adapters/claude.js';
 import { syncInstructions, instructionPaths } from '../instructions.js';
 
 // Known secret values, for redacting anything native we print or serialise.
-function secretPairs() { return listSecrets().map((n) => [n, resolveSecret(n)]); }
+function secretPairs(plan) { return [...new Set([...listSecrets(), ...refsIn(plan?.actions?.map((a) => a.source))])].map((n) => [n, resolveSecret(n)]); }
 
 // A conflict line that does not show the two sides makes --prefer a blind choice.
 function sides(a, pairs) {
-  const src = a.source ? JSON.stringify(a.source) : '(absent)';
-  const nat = a.native ? JSON.stringify(redactKnown(a.native, pairs)) : '(absent)';
+  const src = a.source ? JSON.stringify(redactConfig(a.source, pairs)) : '(absent)';
+  const nat = a.native ? JSON.stringify(redactConfig(a.native, pairs)) : '(absent)';
   return `\n      source: ${src}\n      native: ${nat}`;
 }
 
-export function toJson(plan, pairs = secretPairs()) {
+export function toJson(plan, pairs = secretPairs(plan)) {
   const base = { target: plan.targetId, agent: plan.agent, scope: plan.scope, file: plan.native?.file ?? null };
   if (plan.skipped) return { ...base, skipped: plan.skipped };
   return {
@@ -25,7 +26,7 @@ export function toJson(plan, pairs = secretPairs()) {
     skippedByPolicy: plan.skippedByPolicy,
     actions: plan.actions.map((a) => ({
       name: a.name, op: a.op, reason: a.reason, locked: a.locked, foreign: a.foreign,
-      source: a.source ?? null, native: a.native ? redactKnown(a.native, pairs) : null,
+      source: a.source ? redactConfig(a.source, pairs) : null, native: a.native ? redactConfig(a.native, pairs) : null,
     })),
     summary: summarize(plan.actions),
   };
@@ -37,7 +38,7 @@ export function printPlan(plan, { verbose = true } = {}) {
   console.log(`\n${c.bold(TARGETS[plan.targetId].label)}`);
   if (plan.skipped) { console.log(`  ${c.dim(plan.skipped)}`); return; }
   for (const e of plan.errors) console.log(`  ${c.bad('error   ')} ${e}`);
-  const pairs = plan.actions.some((a) => a.op === 'conflict') ? secretPairs() : [];
+  const pairs = plan.actions.some((a) => a.op === 'conflict') ? secretPairs(plan) : [];
   for (const a of plan.actions) {
     if (a.op === 'noop' && !verbose) continue;
     if (a.op === 'unmanaged' && !verbose) continue;

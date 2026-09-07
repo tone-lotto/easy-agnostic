@@ -9,26 +9,8 @@ import { printPlan, toJson } from './status.js';
 import { extractSecrets } from './adopt.js';
 import { refreshInit } from '../shell.js';
 import * as codex from '../adapters/codex.js';
-import { checkThrottled, selfUpdate, installKind, VERSION } from '../update.js';
 import { installSkill } from './hook.js';
 import { syncInstructions, instructionPaths } from '../instructions.js';
-
-// apply runs on every agent launch, which makes it the place an update can happen without
-// anyone remembering to. At most one registry call a day; a global install updates itself
-// in the background and the next launch runs the new version; anything else is told once.
-async function maybeUpdate({ tell, quiet }) {
-  const agents = loadSource(scopePaths('user')).agents;
-  if (agents?.autoUpdate === false || process.env.EAG_NO_UPDATE) return;
-  const latest = await checkThrottled();
-  if (!latest) return;
-  if (installKind() === 'global') {
-    const r = selfUpdate(latest, { detached: true });
-    tell(`${c.ok('eag')} ${VERSION} → ${latest} installing in the background; the next launch runs it`);
-    if (!r.ok) tell(`${c.warn('eag')} update to ${latest} could not start: ${r.reason}`);
-  } else if (!quiet || true) {
-    tell(`${c.warn('eag')} ${latest} is available (you have ${VERSION}). ${installKind() === 'dev' ? 'This is a checkout: git pull' : 'Run: npm i -g easy-agnostic'}`);
-  }
-}
 
 // `--prefer native` used to record the native value only in the snapshot. The next plain
 // apply then saw state == native != source and called it "source changed", and overwrote
@@ -150,7 +132,7 @@ async function runApply(_args, flags) {
           // the agent and only the source (with ${NAME} intact) can put it back.
           const act = plan.actions.find((a) => a.name === f.name);
           if (f.op === 'add-json' && act?.op === 'update') {
-            tell(`    ${c.dim(`removed before the add failed; restore with: claude mcp add-json ${f.name} '${JSON.stringify(act.source ?? {})}' -s user`)}`);
+            tell(`    ${c.dim(f.rollback === 'restored' ? 'previous configuration restored; retry eag apply after fixing the error' : 'replacement and recovery did not complete; review the private backup and retry eag apply')}`);
           }
         }
         failures += res.failures.length;
@@ -168,7 +150,6 @@ async function runApply(_args, flags) {
   if (conflicts) tell(`${quiet ? '' : '\n'}${c.bad(`${conflicts} conflict(s) left untouched.`)} For MCP use ${c.bold('eag apply --prefer source|native')}; for instructions use ${c.bold('eag instructions --prefer agents|claude')}.`);
   if (failures && !quiet) console.log(`\n${c.bad(`${failures} write(s) failed.`)} See "failed" above; a retry picks them up again.`);
   if (dry) say(`\n${c.dim('dry run: nothing written')}`);
-  if (hasMcp && !dry && !json) { try { await maybeUpdate({ tell, quiet }); } catch { /* never fail an apply over an update check */ } }
   if (quiet && !dry) reportQuiet(problems);
   // Keep the generated shell file in step with what is installed, so an agent added after
   // `eag hook install` gets wrapped without the user having to remember this exists.

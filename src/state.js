@@ -5,7 +5,11 @@ import { readJson, writeJson } from './util.js';
 // the 3-way merge: it is how we tell "the user edited the native file" from
 // "the source changed".
 export function loadState(stateDir, targetId) {
-  return readJson(path.join(stateDir, `${targetId}.json`), { servers: {} });
+  const file = path.join(stateDir, `${targetId}.json`);
+  const state = readJson(file, { servers: {} });
+  if (!state || typeof state !== 'object' || !state.servers || typeof state.servers !== 'object' || Array.isArray(state.servers)
+    || Object.values(state.servers).some((s) => !s || typeof s !== 'object' || Array.isArray(s))) throw new Error(`${file}: invalid state snapshot; restore a valid backup before applying`);
+  return state;
 }
 export function saveState(stateDir, targetId, servers) {
   // Rendered entries can hold literal secrets (Claude user scope), so the snapshot is 0600.

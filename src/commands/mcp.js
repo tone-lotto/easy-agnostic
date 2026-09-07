@@ -1,7 +1,8 @@
-import { scopePaths, projectRoot } from '../paths.js';
+import { scopePaths, projectRoot, assertProjectScope } from '../paths.js';
 import { loadSource, saveMcp, saveAgents, validateServer } from '../source.js';
 import { c, refsIn } from '../util.js';
 import { resolveSecret } from '../secrets.js';
+import { redactConfig } from '../redact.js';
 
 function list(flag) { return flag === undefined ? [] : [].concat(flag); }
 
@@ -22,7 +23,8 @@ export async function run(args, flags) {
         const t = s.agents?.servers?.[name]?.targets || {};
         const off = Object.entries(t).filter(([, v]) => v === false).map(([k]) => `${k}:off`);
         const missing = [...refsIn(srv)].filter((r) => resolveSecret(r) === undefined);
-        rows.push([name, sc, srv.url ? 'http' : 'stdio', srv.url || `${srv.command} ${(srv.args || []).join(' ')}`, off.join(' '), missing.length ? c.warn(`missing: ${missing.join(',')}`) : '', missing]);
+        const safe = redactConfig(srv);
+        rows.push([name, sc, srv.url ? 'http' : 'stdio', safe.url || `${safe.command} ${(safe.args || []).join(' ')}`, off.join(' '), missing.length ? c.warn(`missing: ${missing.join(',')}`) : '', missing]);
       }
     }
     if (flags.json) {
@@ -35,6 +37,7 @@ export async function run(args, flags) {
     return 0;
   }
 
+  assertProjectScope(paths);
   if (sub === 'add') {
     const name = args[1];
     if (!name) throw new Error('usage: eag mcp add <name> (--url U [--header "K: V"]... | --command C [--args a,b] [--env K=V]...) [--type http|sse|stdio] [--scope user|project]');
@@ -46,7 +49,7 @@ export async function run(args, flags) {
     if (flags.url !== undefined) {
       if (type === 'stdio') throw new Error('--type stdio needs --command, not --url');
       entry.type = type || 'http'; entry.url = one('url');
-      const headers = {}; for (const h of list(flags.header)) { const m = /^([^:]+):\s*(.*)$/.exec(String(h)); if (!m) throw new Error(`bad --header ${h}`); headers[m[1].trim()] = m[2]; }
+      const headers = {}; for (const h of list(flags.header)) { const m = /^([^:]+):\s*(.*)$/.exec(String(h)); if (!m) throw new Error('bad --header: expected K: V (value withheld)'); headers[m[1].trim()] = m[2]; }
       if (Object.keys(headers).length) entry.headers = headers;
     } else if (flags.command !== undefined) {
       if (type && type !== 'stdio') throw new Error(`--type ${type} needs --url, not --command`);
@@ -57,11 +60,11 @@ export async function run(args, flags) {
       const args = list(flags.arg).map(String);
       if (flags.args !== undefined) {
         const raw = one('args');
-        if (/\s/.test(raw) && !raw.includes(',')) throw new Error(`--args is comma-separated ("${raw}" has spaces and no comma). Use --arg once per argument, or --args a,b,c`);
+        if (/\s/.test(raw) && !raw.includes(',')) throw new Error('--args is comma-separated (value has spaces and no comma). Use --arg once per argument, or --args a,b,c');
         args.push(...raw.split(','));
       }
       if (args.length) entry.args = args;
-      const env = {}; for (const e of list(flags.env)) { const m = /^([^=]+)=(.*)$/.exec(String(e)); if (!m) throw new Error(`bad --env ${e}`); env[m[1]] = m[2]; }
+      const env = {}; for (const e of list(flags.env)) { const m = /^([^=]+)=(.*)$/.exec(String(e)); if (!m) throw new Error('bad --env: expected K=V (value withheld)'); env[m[1]] = m[2]; }
       if (Object.keys(env).length) entry.env = env;
       if (flags.cwd !== undefined) entry.cwd = one('cwd');
     } else throw new Error('need --url or --command');

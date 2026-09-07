@@ -82,7 +82,6 @@ test('validateServer type-checks headers, env and args', () => {
 test('validateServer stops at "not an object" instead of reading fields off a non-object', () => {
   for (const s of [null, undefined, 'https://a', 42, ['https://a']]) {
     const errs = validateServer('x', s);
-    if (Array.isArray(s)) { assert.deepEqual(errs, ['x: needs "url" or "command"']); continue; }
     assert.deepEqual(errs, ['x: not an object']);
   }
 });
@@ -90,6 +89,36 @@ test('validateServer stops at "not an object" instead of reading fields off a no
 test('validateServer reports every problem at once', () => {
   const errs = validateServer('bad name', { url: 'https://a', command: 'npx', headers: 'x' });
   assert.equal(errs.length, 3);
+});
+
+test('malformed transport values, field elements, and header injection are rejected', () => {
+  for (const entry of [
+    { url: 42 }, { command: {} }, { command: 'node', cwd: '' },
+    { command: 'node', args: [42] }, { command: 'node', args: ['a\0b'] },
+    { command: 'node', env: [] }, { command: 'node', env: { A: {} } },
+    { command: 'node', env: { 'BAD-NAME': 'x' } },
+    { url: 'https://example.com', headers: { X: 'value\r\nInjected: yes' } },
+    { url: 'https://example.com', headers: null },
+    { url: 'file:///etc/passwd' }, { url: 'https://example.com', type: 'stdio' },
+  ]) assert.ok(validateServer('test', entry).length, JSON.stringify(entry));
+});
+
+test('invalid agent policies fail closed instead of changing target selection', () => {
+  for (const policy of [null, [], 'wrong', { targets: [] }, { targets: { codex: 'true' } },
+    { servers: [] }, { servers: { x: null } }, { claude: { secrets: 'typo' } },
+    { servers: { x: { codex: [] } } }]) {
+    const paths = sourceAt('{"mcpServers":{}}');
+    write(paths.agents, JSON.stringify(policy));
+    assert.throws(() => loadSource(paths), /policy|targets|switch|secrets|overrides/);
+  }
+});
+
+test('secret API validates identifiers before touching any backend', () => {
+  for (const name of ['', 'A=B', 'A\nB', '--help', '../secret']) {
+    assert.throws(() => secrets.setSecret(name, 'private'), /secret name must match/);
+    assert.throws(() => secrets.getSecret(name), /secret name must match/);
+    assert.throws(() => secrets.deleteSecret(name), /secret name must match/);
+  }
 });
 
 // Regression: a source that parses but has no "mcpServers" object (a renamed key, or the
@@ -267,7 +296,7 @@ test('the flag allowlist is per command, not global', async () => {
   assert.match(r.err, /accepted: --fix/);
   const noFlags = await capture(() => main(['env', '--fix']));
   assert.equal(noFlags.code, 1);
-  assert.match(noFlags.err, /accepted: \(none\)/);
+  assert.match(noFlags.err, /accepted: --target/);
 });
 
 test('main rejects an unknown command before importing anything', async () => {
@@ -390,7 +419,7 @@ test('project scope that would write the user files is flagged and refused', asy
   const p = scopePaths('project', home);
   assert.equal(p.collides, true);
   assert.equal(p.agents, scopePaths('user').agents);
-  assert.throws(() => assertProjectScope(p), /would write .*agents\.json/);
+  assert.throws(() => assertProjectScope(p), /overlaps a user-level/);
 
   const ok = scopePaths('project', path.join(home, 'some-repo'));
   assert.equal(ok.collides, false);

@@ -119,7 +119,7 @@ test('regression A5: a delete whose command fails keeps its snapshot entry and i
   const res = applyPlan(first, { backupDir: backupDirFor(first) });
   assert.equal(res.failures.length, 1);
   assert.equal(res.failures[0].name, 'gone');
-  assert.match(res.failures[0].error, /stub claude refused/);
+  assert.match(res.failures[0].error, /claude mcp remove exited/);
 
   const snap = JSON.parse(read(userState('claude-user'))).servers;
   assert.deepEqual(snap.gone, GONE, 'a delete that did not happen must stay tracked');

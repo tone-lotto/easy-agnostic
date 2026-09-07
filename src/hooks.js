@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { EAG_HOME, CLAUDE_CONFIG_DIR, CODEX_HOME } from './paths.js';
-import { exists, readJson, writeFileAtomic, backup, deepEqual } from './util.js';
+import { exists, readJson, writeFileAtomic, backup, deepEqual, shellQuote } from './util.js';
 
 // The shell wrapper only covers terminal launches. An agent started from a desktop app or
 // an IDE extension reads no rc, so the agent's own session hook is the only way in — and it
@@ -27,9 +27,9 @@ export function renderLauncher({ node = process.execPath, entry = ENTRY, binDir 
 # GUI-launched agent has no shell rc and, on macOS, no node on PATH. Everything below is
 # either an absolute path or a search, and every failure is silent — a sync problem must
 # never stop an agent from opening.
-NODE='${node}'
-EAG='${entry}'
-BIN='${binDir ?? ''}'
+NODE=${shellQuote(node)}
+EAG=${shellQuote(entry)}
+BIN=${shellQuote(binDir ?? '')}
 [ -x "$NODE" ] || NODE=$(command -v node 2>/dev/null)
 for c in /usr/local/bin/node /opt/homebrew/bin/node "$HOME/.local/bin/node"; do
   [ -x "$NODE" ] && break
@@ -58,8 +58,8 @@ export function writeLauncher({ dryRun = false, binDir = null } = {}) {
 // it, adds exactly one SessionStart entry, and writes it back. No matcher: fire on every
 // start. The command is the launcher, never `eag` itself, for the PATH reason above.
 export const CLAUDE_SETTINGS = path.join(CLAUDE_CONFIG_DIR, 'settings.json');
-const claudeCommand = () => `/bin/sh ${LAUNCHER}`;
-const isOurs = (h) => typeof h?.command === 'string' && h.command.includes(LAUNCHER);
+const claudeCommand = () => `/bin/sh ${shellQuote(LAUNCHER)}`;
+const isOurs = (h) => typeof h?.command === 'string' && (h.command.includes(LAUNCHER) || h.command.includes(shellQuote(LAUNCHER)));
 
 // `timeout` is not optional: a SessionStart command hook with no timeout blocks session
 // startup for as long as it runs (measured: a 75s hook held startup for 75s, uncapped). An
@@ -133,7 +133,7 @@ export function uninstallClaude({ dryRun = false, backupDir } = {}) {
 // key the binary documents as "Hook config path" is a plugin.json field, not a config one.)
 // The shape is the same as Claude's, which is not a coincidence: Codex mirrored it.
 export const CODEX_HOOKS = path.join(CODEX_HOME, 'hooks.json');
-const codexIsOurs = (h) => typeof h?.command === 'string' && h.command.includes(LAUNCHER);
+const codexIsOurs = isOurs;
 
 // No statusMessage: it renders a spinner label, and a sync nobody asked to watch should not
 // put anything on screen. timeout for the same reason it is set for Claude.
@@ -208,14 +208,18 @@ export function codexTrust({ timeoutMs = 8000 } = {}) {
       p = spawn('codex', ['app-server'], { stdio: ['pipe', 'pipe', 'ignore'] });
     } catch { resolve(null); return; }
     let done = false;
-    const finish = (v) => { if (done) return; done = true; try { p.kill(); } catch { /* already gone */ } resolve(v); };
-    const timer = setTimeout(() => finish(null), timeoutMs);
+    let timer;
+    const finish = (v) => { if (done) return; done = true; clearTimeout(timer); try { p.kill('SIGKILL'); } catch { /* already gone */ } resolve(v); };
+    timer = setTimeout(() => finish(null), timeoutMs);
     timer.unref?.();
     p.on('error', () => finish(null));
     p.on('close', () => finish(null));
+    p.stdin.on('error', () => finish(null));
     let buf = '';
     p.stdout.on('data', (d) => {
+      if (done) return;
       buf += d;
+      if (buf.length > 4 * 1024 * 1024) { finish(null); return; }
       const lines = buf.split('\n');
       buf = lines.pop();
       for (const line of lines) {
@@ -224,7 +228,7 @@ export function codexTrust({ timeoutMs = 8000 } = {}) {
         if (j?.id !== 2) continue;
         clearTimeout(timer);
         const all = (j.result?.data || []).flatMap((d2) => d2.hooks || []);
-        const ours = all.filter((h) => h.sourcePath === CODEX_HOOKS && typeof h.command === 'string' && h.command.includes(LAUNCHER));
+        const ours = all.filter((h) => h.sourcePath === CODEX_HOOKS && isOurs(h));
         finish(ours.length ? { key: ours[0].key, hash: ours[0].currentHash, status: ours[0].trustStatus, enabled: ours[0].enabled } : null);
         return;
       }

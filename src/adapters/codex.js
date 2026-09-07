@@ -2,8 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parse, stringify } from 'smol-toml';
 import { CODEX_HOME } from '../paths.js';
-import { exists, writeFileAtomic, backup, WHOLE_REF, SECRET_REF, mapStrings, sortKeys, looksLikeSecret } from '../util.js';
+import { exists, writeFileAtomic, backup, WHOLE_REF, SECRET_REF, mapStrings, sortKeys } from '../util.js';
 import { resolveSecret } from '../secrets.js';
+import { validateServer } from '../source.js';
+import { containsSensitiveLiteral } from '../redact.js';
 
 // Codex keeps MCP servers in TOML. eag owns exactly one region of that file,
 // delimited by markers, and never rewrites text outside it. Anything defined
@@ -89,7 +91,7 @@ export function read(scope, root) {
   const file = configPath(scope, root);
   const text = exists(file) ? fs.readFileSync(file, 'utf8') : '';
   let parsed = {};
-  try { parsed = text ? parse(text) : {}; } catch (e) { throw new Error(`${file} is not valid TOML: ${e.message}`); }
+  try { parsed = text ? parse(text) : {}; } catch { throw new Error(`${file} is not valid TOML (content withheld)`); }
   const all = parsed.mcp_servers && typeof parsed.mcp_servers === 'object' ? parsed.mcp_servers : {};
   const { block, damaged } = splitBlock(text);
   let managed = new Set();
@@ -115,6 +117,7 @@ export function read(scope, root) {
 // references wherever Codex has a field for it; elsewhere they become literals
 // and the caller is warned.
 export function render(name, src, overrides = {}, warn = () => {}) {
+  if (!overrides || typeof overrides !== 'object' || Array.isArray(overrides)) throw new Error(`${name}: Codex overrides must be an object`);
   let resolved = false;
   const literal = (v, where) => mapStrings(v, (s) => s.replace(SECRET_REF, (_m, n) => {
     const val = resolveSecret(n);
@@ -152,10 +155,34 @@ export function render(name, src, overrides = {}, warn = () => {}) {
     if (envVars.length) o.env_vars = envVars;
     if (src.cwd) o.cwd = literal(src.cwd, 'cwd');
   }
+  // Overrides are still configuration, not a bypass around reference resolution,
+  // validation, or the exact literal-permission marker.
   Object.assign(o, overrides);
+  validateNative(name, o);
+  Object.assign(o, literal(overrides, 'Codex overrides'));
+  validateNative(name, o); // Resolved values may contain invalid URLs/control characters.
   const out = canonical(o); // after canonical(): sortKeys rebuilds the object and would drop the marker
   if (resolved) Object.defineProperty(out, HAS_LITERAL, { value: true });
   return out;
+}
+
+function validateNative(name, table) {
+  const source = {};
+  for (const key of ['url', 'command', 'args', 'cwd', 'env']) if (key in table) source[key] = table[key];
+  if ('http_headers' in table) source.headers = table.http_headers;
+  const errors = validateServer(name, source);
+  const identifier = (v) => typeof v === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(v);
+  if ('bearer_token_env_var' in table && !identifier(table.bearer_token_env_var)) errors.push('bearer_token_env_var must be an environment variable name');
+  if ('env_vars' in table && (!Array.isArray(table.env_vars) || !table.env_vars.every(identifier))) errors.push('env_vars must be an array of environment variable names');
+  if ('env_http_headers' in table) {
+    const value = table.env_http_headers;
+    if (!value || typeof value !== 'object' || Array.isArray(value) || !Object.values(value).every(identifier)) errors.push('env_http_headers must map header names to environment variable names');
+    else errors.push(...validateServer(name, { url: 'https://example.com', headers: value }));
+  }
+  for (const key of ['startup_timeout_sec', 'tool_timeout_sec']) if (key in table && (typeof table[key] !== 'number' || !Number.isFinite(table[key]) || table[key] <= 0)) errors.push(`${key} must be a positive finite number`);
+  for (const key of ['enabled', 'required']) if (key in table && typeof table[key] !== 'boolean') errors.push(`${key} must be boolean`);
+  for (const key of ['enabled_tools', 'disabled_tools']) if (key in table && (!Array.isArray(table[key]) || table[key].some((v) => typeof v !== 'string' || !v || /[\0\r\n]/.test(v)))) errors.push(`${key} must contain non-empty single-line tool names`);
+  if (errors.length) throw new Error(`${name}: invalid Codex configuration: ${errors.join('; ')}`);
 }
 
 function renderBlock(entries, scope) {
@@ -175,9 +202,7 @@ function renderBlock(entries, scope) {
 function carriesLiteral(entries) {
   for (const t of entries.values()) {
     if (t[HAS_LITERAL]) return true;                                            // render() resolved one: exact
-    let found = false;
-    mapStrings(t, (v) => { if (looksLikeSecret(v)) found = true; return v; });  // typed into the source, or a native table kept in a conflict: by shape
-    if (found) return true;
+    if (containsSensitiveLiteral(t)) return true;
   }
   return false;
 }
@@ -188,13 +213,14 @@ export function ensureMode(scope, root, entries) {
   const file = configPath(scope, root);
   if (!exists(file) || !carriesLiteral(entries)) return null;
   if (!(fs.statSync(file).mode & 0o077)) return null;
-  fs.chmodSync(file, 0o600);
+  fs.chmodSync(file, fs.statSync(file).mode & 0o600);
   return file;
 }
 
 // entries: Map name -> table object that must end up inside the managed block.
-export function write(scope, root, entries, { backupDir, dryRun } = {}) {
+export function write(scope, root, entries, { backupDir, dryRun, expectedText } = {}) {
   const cur = read(scope, root);
+  if (expectedText !== undefined && cur.text !== expectedText) throw new Error('Codex configuration changed since planning; retry');
   if (cur.damaged) throw new Error(`refusing to write ${cur.file}: ${cur.damaged}. Repair the markers by hand (an older copy may be under .state/backup/) and run eag apply again.`);
   const { before, after } = splitBlock(cur.text);
   const block = renderBlock(entries, scope);
@@ -205,12 +231,13 @@ export function write(scope, root, entries, { backupDir, dryRun } = {}) {
     text = `${base}${base ? '\n' : ''}${block}\n`;
   }
   // Never leave the agent with a file it cannot parse.
-  try { parse(text); } catch (e) { throw new Error(`refusing to write ${cur.file}: result is not valid TOML: ${e.message}`); }
+  try { parse(text); } catch { throw new Error(`refusing to write ${cur.file}: result is not valid TOML (content withheld)`); }
   if (dryRun) return { file: cur.file, text, changed: text !== cur.text };
   const bak = backup(cur.file, backupDir, `codex-${scope}`);
   // A rewritten file keeps its own mode, except when the block we are writing carries a
   // credential: then 0600. Modes are only ever tightened, never widened.
-  writeFileAtomic(cur.file, text, cur.exists && !carriesLiteral(entries) ? undefined : 0o600);
+  const mode = cur.exists ? (carriesLiteral(entries) ? fs.statSync(cur.file).mode & 0o600 : undefined) : 0o600;
+  writeFileAtomic(cur.file, text, mode, { expected: cur.exists ? cur.text : null });
   return { file: cur.file, text, backup: bak, changed: text !== cur.text };
 }
 

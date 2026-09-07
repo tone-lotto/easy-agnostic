@@ -1,7 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { runCommand as execFileSync } from './process.js';
+import { processFailure } from './redact.js';
 import { EAG_HOME } from './paths.js';
+import { withMutationLock } from './lock.js';
 import { readJson, writeJson, writeFileAtomic, exists, ensureDir } from './util.js';
 
 // Secrets never live in mcp.json. They live in the OS keychain (macOS `security`,
@@ -20,7 +22,13 @@ function backend() {
     return forced;
   }
   if (process.platform === 'darwin') return 'keychain';
-  try { execFileSync('secret-tool', ['--version'], { stdio: 'ignore' }); return 'secret-tool'; } catch { return 'file'; }
+  // secret-tool does not consistently implement --version. Detect the executable,
+  // not whether a probe operation succeeded: a locked store must not select plaintext.
+  for (const dir of (process.env.PATH || '').split(path.delimiter)) {
+    if (!dir) continue;
+    try { fs.accessSync(path.join(dir, 'secret-tool'), fs.constants.X_OK); return 'secret-tool'; } catch { /* next directory */ }
+  }
+  return 'file';
 }
 function run(cmd, args, input) {
   return execFileSync(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'], input }).toString();
@@ -48,19 +56,35 @@ function writeEnvFile(map) {
     .concat(Object.entries(map).map(([k, v]) => `${k}='${enc(v)}'`)).join('\n') + '\n';
   writeFileAtomic(ENV_FILE, text, 0o600);
 }
-function index() { return readJson(INDEX, []); }
+function validName(name) { return typeof name === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(name); }
+function assertName(name) { if (!validName(name)) throw new Error('secret name must match [A-Za-z_][A-Za-z0-9_]*'); }
+function index() {
+  const names = readJson(INDEX, []);
+  if (!Array.isArray(names) || names.some((name) => !validName(name))) throw new Error('invalid secret index; expected an array of secret identifiers');
+  return names;
+}
 function saveIndex(names) { writeJson(INDEX, [...new Set(names)].sort(), 0o600); }
 
 export function getSecret(name) {
+  assertName(name);
   const b = backend();
   try {
     if (b === 'keychain') return run('security', ['find-generic-password', '-s', SERVICE, '-a', name, '-w']).replace(/\n$/, '');
     if (b === 'secret-tool') return run('secret-tool', ['lookup', 'service', SERVICE, 'account', name]).replace(/\n$/, '');
-  } catch { /* not found */ }
+  } catch (e) {
+    if (!isMissing(b, e)) throw new Error(`could not read ${name} from the ${b} store: ${processFailure(b, e)}`);
+  }
   const fromFile = readEnvFile()[name];
   return fromFile;
 }
 export function setSecret(name, value) {
+  assertName(name);
+  if (typeof value !== 'string' || value === '') throw new Error(`${name}: a secret value must be a non-empty string`);
+  return withMutationLock(() => setSecretLocked(name, value));
+}
+function setSecretLocked(name, value) {
+  assertName(name);
+  const names = index(); // Refuse corrupted tracking before storing a credential.
   const b = backend();
   if (typeof value !== 'string' || value === '') throw new Error(`${name}: a secret value must be a non-empty string`);
   try {
@@ -70,12 +94,17 @@ export function setSecret(name, value) {
   } catch (e) {
     // execFileSync puts the whole argv in e.message, and for the keychain that argv holds
     // the value itself. bin/eag.js prints err.message, so it must never carry the secret.
-    const detail = (e.stderr?.toString() || '').split(value).join('****').trim();
-    throw new Error(`could not store ${name} in the ${b} store${detail ? `: ${detail}` : ` (exit ${e.status ?? e.signal ?? 'unknown'})`}`);
+    throw new Error(`could not store ${name} in the ${b} store: ${processFailure(b, e)}`);
   }
-  saveIndex([...index(), name]);
+  saveIndex([...names, name]);
 }
 export function deleteSecret(name) {
+  assertName(name);
+  return withMutationLock(() => deleteSecretLocked(name));
+}
+function deleteSecretLocked(name) {
+  assertName(name);
+  const names = index();
   const b = backend();
   let storeError = null;
   try {
@@ -85,14 +114,19 @@ export function deleteSecret(name) {
     // "not there" is success (security exits 44 = errSecItemNotFound; secret-tool exits
     // non-zero with no output). Anything else must not be reported as removed while the
     // value stays resolvable and keeps being written into the agents' configs.
-    const missing = e.status === 44 || (b === 'secret-tool' && !e.stderr?.toString().trim());
-    if (!missing) storeError = e.stderr?.toString().trim() || `exit ${e.status ?? e.signal ?? 'unknown'}`;
+    const missing = isMissing(b, e);
+    if (!missing) storeError = processFailure(b, e);
   }
-  const m = readEnvFile(); if (name in m) { delete m[name]; writeEnvFile(m); }
   // Leave the name in the index when the store still has it: the index is what `eag secret
   // ls` and `eag env` read, and saying "removed" over a live credential is the worse lie.
   if (storeError) throw new Error(`could not remove ${name} from the ${b} store: ${storeError}`);
-  saveIndex(index().filter((n) => n !== name));
+  const m = readEnvFile(); if (name in m) { delete m[name]; writeEnvFile(m); }
+  saveIndex(names.filter((n) => n !== name));
+}
+function isMissing(b, e) {
+  if (e.signal || e.code === 'ETIMEDOUT' || e.code === 'ENOENT') return false;
+  return (b === 'keychain' && e.status === 44)
+    || (b === 'secret-tool' && e.status === 1 && !e.stderr?.toString().trim());
 }
 export function listSecrets() { return index(); }
 export function backendName() { return backend(); }

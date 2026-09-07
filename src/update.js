@@ -1,10 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { EAG_HOME } from './paths.js';
 import { readJson, writeJson, exists } from './util.js';
+import { processFailure } from './redact.js';
+import { withMutationLock, withLock } from './lock.js';
 
 // eag is invoked by hooks and wrappers that run without the user's PATH, from a location
 // that depends on HOW it was installed. Everything here exists so those callers keep working
@@ -60,29 +62,34 @@ export function onPath(bin = 'eag') {
 }
 
 export const newer = (a, b) => {
+  if (!validVersion(a) || !validVersion(b)) return false;
   const pa = a.split('.').map(Number); const pb = b.split('.').map(Number);
   for (let i = 0; i < 3; i++) { if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) > (pb[i] || 0); }
   return false;
 };
 
+// Only exact stable registry versions can become npm package specifications.
+export const validVersion = (v) => typeof v === 'string' && /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(v);
+
 // The registry's idea of latest. Short timeout, any failure is "unknown": this runs from a
 // hook, and a hook must never wait on the network.
 export async function latestVersion({ timeoutMs = 3000 } = {}) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), timeoutMs);
   try {
-    const ctl = new AbortController();
-    const t = setTimeout(() => ctl.abort(), timeoutMs);
     const r = await fetch(`https://registry.npmjs.org/${PKG.name}/latest`, { signal: ctl.signal, headers: { accept: 'application/json' } });
-    clearTimeout(t);
     if (!r.ok) return null;
     const v = (await r.json()).version;
-    return typeof v === 'string' ? v : null;
+    return validVersion(v) ? v : null;
   } catch { return null; }
+  finally { clearTimeout(t); }
 }
 
 // At most one registry call a day, remembered in .state/update.json. Returns the newer
 // version when there is one, else null — and never throws.
 export async function checkThrottled({ everyMs = 24 * 3600 * 1000, now = Date.now() } = {}) {
-  const st = readJson(STAMP, {});
+  let st;
+  try { st = readJson(STAMP, {}) ?? {}; } catch { st = {}; }
   if (st.checkedAt && now - st.checkedAt < everyMs) return st.latest && newer(st.latest, VERSION) ? st.latest : null;
   // Offline or a broken registry: keep the last answer rather than forgetting it.
   const latest = (await latestVersion()) ?? st.latest ?? null;
@@ -93,18 +100,21 @@ export async function checkThrottled({ everyMs = 24 * 3600 * 1000, now = Date.no
 // Install a version in place. Only for a global install: an npx cache cannot be updated
 // and a dev checkout must never be overwritten by npm.
 export function selfUpdate(version, { detached = false, fromNpx = false } = {}) {
+  if (!validVersion(version)) return { ok: false, reason: 'expected an exact stable version (major.minor.patch)' };
+  if (detached) return { ok: false, reason: 'background installation is disabled; run eag update explicitly' };
   const kind = installKind();
   if (kind === 'dev') return { ok: false, reason: 'installed from a checkout (npm link); update it with git' };
   if (kind === 'npx' && !fromNpx) return { ok: false, reason: 'running from the npx cache; run: npm i -g easy-agnostic' };
-  const args = ['i', '-g', `${PKG.name}@${version}`];
-  if (detached) {
-    try {
-      const [cmd, ...pre] = npmArgv();
-      const p = spawn(cmd, [...pre, ...args], { detached: true, stdio: 'ignore' });
-      p.unref();
-      return { ok: true, background: true };
-    } catch (e) { return { ok: false, reason: e.message }; }
-  }
-  try { runNpm(args, { stdio: ['ignore', 'pipe', 'pipe'], timeout: 120000 }); return { ok: true }; }
-  catch (e) { return { ok: false, reason: e.stderr?.toString().trim() || e.message }; }
+  const args = ['i', '-g', '--ignore-scripts', `${PKG.name}@${version}`];
+  try {
+    return withMutationLock(() => {
+      const binDir = globalBinDir();
+      if (!binDir) return { ok: false, reason: 'could not determine the npm global prefix; nothing installed' };
+      // Shared across EAG_HOME configurations and outside npm's replaced package tree.
+      return withLock(path.join(path.dirname(binDir), '.easy-agnostic-update.lock'), () => {
+        runNpm(args, { stdio: ['ignore', 'pipe', 'pipe'], timeout: 120000, killSignal: 'SIGKILL', maxBuffer: 4 * 1024 * 1024 });
+        return { ok: true };
+      });
+    });
+  } catch (e) { return { ok: false, reason: processFailure('npm install', e) }; }
 }

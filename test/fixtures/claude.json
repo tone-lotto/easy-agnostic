@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "fixture-claude": {
+      "type": "http",
+      "url": "https://example.com/claude",
+      "headers": { "Authorization": "Bearer fixture-private-token" }
+    }
+  },
+  "projects": {
+    "/synthetic/project": {
+      "mcpServers": {
+        "fixture-project": { "type": "http", "url": "https://example.com/project" }
+      }
+    }
+  }
+}

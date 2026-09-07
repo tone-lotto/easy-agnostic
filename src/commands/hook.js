@@ -94,7 +94,7 @@ export async function run(args, flags) {
       const r = shell.installRc({ dryRun: dry, backupDir: backupDir() });
       if (r.changed) {
         console.log(`${c.ok(r.created ? 'created' : 'updated')} ${r.rc}`);
-        if (r.replacedLegacy) console.log(c.dim('        replaced the bare eval "$(eag env)" line; the generated file does that now'));
+        if (r.replacedLegacy) console.log(c.dim('        removed the shell-wide secret export; restart your terminal to clear old inherited credentials'));
       } else console.log(`${c.dim('current')} ${r.rc}`);
     }
 

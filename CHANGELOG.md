@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.10.0 — 2026-09-07
+
+- Refresh target-filtered credentials inside a launch subshell instead of exporting them at terminal startup. Pi gets a credential wrapper; missing required values stop launch. Restart existing terminals after upgrading to clear old inherited exports.
+- Remove automatic package updates from routine syncs. Explicit updates require exact stable versions, disable npm lifecycle scripts, serialize installation at the npm prefix, and report refresh failures separately.
+- Sanitize config previews and subprocess/parser failures; protect short literal credentials with private Codex permissions. Credential-store errors now fail closed instead of silently selecting stale fallback values.
+- Serialize mutations, reject stale source/policy/native/state plans, use conditional atomic writes and unique backups, and refuse project aliases of user-level configuration paths.
+- Validate server fields, policies, environment pointers, secret identifiers, and Codex overrides. Resolved override credentials receive the same permission handling as source references.
+- Back up Claude replacements and attempt rollback on failed additions; retain recovery tracking and report failed rollback explicitly.
+- Preserve both sides of skill collisions in either scope and restore agent-local directories after failed replacement linking.
+- Bound subprocess/network operations, harden shell path quoting, and add fixture-only end-to-end tests plus macOS/Linux CI. Security limitations are documented in the packaged SECURITY.md.
+
 ## 0.9.0 — 2026-09-07
 
 - Add `eag adopt skills --scope project` to share skills within a repository and create relative Claude links without moving global skills. `setup --project` now includes project skill adoption.

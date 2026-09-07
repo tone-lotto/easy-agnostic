@@ -1,6 +1,7 @@
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import { runCommand as execFileSync } from './process.js';
 
 // Every path honours the same env vars the agents themselves use, so the whole
 // tool can be pointed at a sandbox: EAG_HOME, CLAUDE_CONFIG_DIR, CODEX_HOME, PI_CODING_AGENT_DIR.
@@ -12,6 +13,18 @@ export const CLAUDE_JSON = process.env.CLAUDE_CONFIG_DIR
   : path.join(HOME, '.claude.json');
 export const CODEX_HOME = process.env.CODEX_HOME || path.join(HOME, '.codex');
 export const PI_AGENT_DIR = process.env.PI_CODING_AGENT_DIR || path.join(HOME, '.pi', 'agent');
+
+// Resolve existing ancestors too: a missing config inside a linked directory is
+// still an alias of the destination where it would be created.
+export function physicalPath(file) {
+  const absolute = path.resolve(file);
+  try { return fs.realpathSync(absolute); }
+  catch (e) {
+    if (e.code !== 'ENOENT') throw e;
+    const parent = path.dirname(absolute);
+    return parent === absolute ? absolute : path.join(physicalPath(parent), path.basename(absolute));
+  }
+}
 
 export function projectRoot(cwd = process.cwd()) {
   if (process.env.EAG_PROJECT) return path.resolve(process.env.EAG_PROJECT);
@@ -32,12 +45,14 @@ export function scopePaths(scope, root) {
   // defaults to ~/.agents — would put the project's policy in the machine-wide agents.json
   // and its snapshots in the user's state dir. One apply there rewrites every target's
   // policy for the whole machine. Callers must refuse to write; readers must skip it.
-  p.collides = path.resolve(p.agents) === path.resolve(path.join(EAG_HOME, 'agents.json'));
+  const projectFiles = [p.mcp, p.agents, p.state, path.join(root, '.codex', 'config.toml')].map(physicalPath);
+  const userFiles = [path.join(EAG_HOME, 'mcp.json'), path.join(EAG_HOME, 'agents.json'), path.join(EAG_HOME, '.state'), path.join(CODEX_HOME, 'config.toml')].map(physicalPath);
+  p.collides = projectFiles.some((file) => userFiles.includes(file));
   return p;
 }
 
 // The message every command that would write project scope shares.
 export function assertProjectScope(paths) {
-  if (!paths.collides) return paths;
-  throw new Error(`project scope for ${paths.root} would write ${paths.agents}, which is the user-level file (EAG_HOME=${EAG_HOME}).\nRun this from a project directory, or point EAG_PROJECT at one.`);
+  if (!(paths.scope === 'project' ? scopePaths('project', paths.root).collides : paths.collides)) return paths;
+  throw new Error(`project scope for ${paths.root} overlaps a user-level configuration or state path (EAG_HOME=${EAG_HOME}).\nRun this from a separate project directory, or remove the alias to user-level files.`);
 }

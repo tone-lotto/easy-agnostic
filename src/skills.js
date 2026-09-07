@@ -1,5 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { withMutationLock } from './lock.js';
 import { EAG_HOME, CLAUDE_CONFIG_DIR, CODEX_HOME, projectRoot, scopePaths, assertProjectScope } from './paths.js';
 import { exists, sameTree } from './util.js';
 
@@ -79,6 +81,7 @@ export function plan(options = {}) {
     for (const name of realSkills(dir, options)) {
       const from = path.join(dir, name);
       const shared = path.join(sharedDir, name);
+      if (present(shared) && fs.realpathSync(shared) === fs.realpathSync(from)) continue;
       if (present(shared)) {
         out.push({ agent, name, from, op: sameTree(shared, from) ? 'duplicate' : 'collision', against: shared });
         continue;
@@ -92,12 +95,12 @@ export function plan(options = {}) {
       out.push({ agent, name, from, op: 'adopt' });
     }
   }
+  // A collision has no winner in either scope, including the first copy encountered.
+  const clashes = new Set(out.filter((i) => i.op === 'collision').map((i) => i.name));
+  for (const it of out) if (clashes.has(it.name) && it.op !== 'collision') {
+    it.op = 'collision'; it.against = out.find((other) => other.name === it.name && other.from !== it.from)?.from;
+  }
   if (options.scope === 'project') {
-    // No arbitrary winner when two project agents use the same name differently.
-    const clashes = new Set(out.filter((i) => i.op === 'collision').map((i) => i.name));
-    for (const it of out) if (clashes.has(it.name) && it.op !== 'collision') {
-      it.op = 'collision'; it.against = out.find((other) => other.name === it.name && other.from !== it.from)?.from;
-    }
     const names = new Set([...realSkills(sharedDir, options), ...out.filter((i) => i.op === 'adopt').map((i) => i.name)]);
     for (const name of names) if (!clashes.has(name) && !present(path.join(agents.claude.dir, name))) {
       out.push({ agent: 'claude', name, from: path.join(agents.claude.dir, name), op: 'link' });
@@ -107,26 +110,48 @@ export function plan(options = {}) {
 }
 
 export function apply(items, { dryRun = false, ...options } = {}) {
+  const execute = () => applyLocked(items, { dryRun, ...options });
+  return dryRun ? execute() : withMutationLock(execute);
+}
+
+function applyLocked(items, { dryRun, ...options }) {
   const { shared: sharedDir, agents } = locations(options);
   const done = [];
   for (const it of items) {
     if (it.op === 'collision') continue;
     const dest = path.join(sharedDir, it.name);
-    if (!Object.hasOwn(agents, it.agent) || path.basename(it.name) !== it.name || it.from !== path.join(agents[it.agent].dir, it.name)) throw new Error('invalid skill adoption plan');
+    if (!Object.hasOwn(agents, it.agent) || !it.name || it.name.startsWith('.') || path.basename(it.name) !== it.name || it.from !== path.join(agents[it.agent].dir, it.name)) throw new Error('invalid skill adoption plan');
     if (it.op === 'adopt') {
       if (!dryRun) {
         if (present(dest) || !fs.lstatSync(it.from).isDirectory() || fs.lstatSync(it.from).isSymbolicLink()) throw new Error(`${it.name}: skill changed since planning; retry`);
         fs.mkdirSync(sharedDir, { recursive: true });
         fs.renameSync(it.from, dest);
-        if (agents[it.agent].afterMove === 'link') fs.symlinkSync(path.relative(path.dirname(it.from), dest), it.from);
+        if (agents[it.agent].afterMove === 'link') {
+          try { fs.symlinkSync(path.relative(path.dirname(it.from), dest), it.from); }
+          catch (e) {
+            if (!present(it.from)) fs.renameSync(dest, it.from);
+            else throw new Error(`${it.name}: link failed; original skill remains at ${dest}; source path was created concurrently`);
+            throw new Error(`${it.name}: link failed (${e.code || 'filesystem error'}); original skill restored`);
+          }
+        }
       }
       done.push({ ...it, dest });
     } else if (it.op === 'duplicate') {
       // The shared copy (or the one adopted from the other agent) is what stays.
       if (!dryRun) {
-        if (fs.lstatSync(it.from).isSymbolicLink() || !sameTree(it.from, dest)) throw new Error(`${it.name}: duplicate changed since planning; retry`);
-        fs.rmSync(it.from, { recursive: true, force: true });
-        if (agents[it.agent].afterMove === 'link') fs.symlinkSync(path.relative(path.dirname(it.from), dest), it.from);
+        if (fs.lstatSync(it.from).isSymbolicLink() || !sameTree(it.from, dest) || fs.realpathSync(it.from) === fs.realpathSync(dest)) throw new Error(`${it.name}: duplicate changed since planning; retry`);
+        // Stage the duplicate until replacement succeeds. A failed link must not turn
+        // a working agent-local skill into a missing directory.
+        const staged = path.join(path.dirname(it.from), `.eag-skill-${randomUUID()}`);
+        fs.renameSync(it.from, staged);
+        try {
+          if (agents[it.agent].afterMove === 'link') fs.symlinkSync(path.relative(path.dirname(it.from), dest), it.from);
+        } catch (e) {
+          if (!present(it.from)) fs.renameSync(staged, it.from);
+          else throw new Error(`${it.name}: link failed; recover the original skill from ${staged}; source path was created concurrently`);
+          throw new Error(`${it.name}: link failed (${e.code || 'filesystem error'}); duplicate restored`);
+        }
+        fs.rmSync(staged, { recursive: true });
       }
       done.push({ ...it, dest });
     } else if (it.op === 'link') {

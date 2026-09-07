@@ -188,8 +188,8 @@ test('nameError rejects the names add-json refuses, which validateServer still a
 test('a failed claude command records an exit status, never the resolved secret', () => {
   const res = claude.write([{ name: 'acme', op: 'update', desired: RENDERED, source: SRC }]);
 
-  assert.equal(res.failures.length, 2, 'both halves of the update failed');
-  assert.deepEqual(res.failures.map((f) => f.op), ['remove', 'add-json'], 'op tells a failed remove from a failed add');
+  assert.equal(res.failures.length, 1, 'a failed remove must stop this update before add');
+  assert.deepEqual(res.failures.map((f) => f.op), ['remove']);
   for (const f of res.failures) {
     assert.equal(f.name, 'acme');
     assert.equal('args' in f, false, 'a failure must not carry the argv');

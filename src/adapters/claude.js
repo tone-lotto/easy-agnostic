@@ -1,4 +1,5 @@
-import { execFileSync } from 'node:child_process';
+import { runCommand as execFileSync } from '../process.js';
+import { redactConfig, processFailure } from '../redact.js';
 import { CLAUDE_JSON } from '../paths.js';
 import { readJson, exists, sortKeys, prune, mapStrings, refsIn, SECRET_REF } from '../util.js';
 import { resolveSecret } from '../secrets.js';
@@ -34,7 +35,7 @@ export function readRaw() { return readJson(CLAUDE_JSON, {}); }
 // the directory the CLI runs in, hence cwd. Failure is reported, never fatal.
 export function removeLocal(root, name) {
   try { execFileSync('claude', ['mcp', 'remove', name, '-s', 'local'], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] }); return null; }
-  catch (e) { return e.stderr?.toString().trim() || `claude mcp remove exited ${e.status ?? e.signal ?? 'abnormally'}`; }
+  catch (e) { return processFailure('claude mcp remove', e); }
 }
 
 // Claude Code does expand ${VAR} — in `env` values and in HTTP headers alike, including
@@ -71,40 +72,45 @@ export function commandsFor(actions, { redact = false } = {}) {
   const cmds = [];
   for (const a of actions) {
     if (a.op === 'delete' || a.op === 'update') cmds.push(['mcp', 'remove', a.name, '-s', 'user']);
-    if (a.op === 'create' || a.op === 'update') cmds.push(['mcp', 'add-json', a.name, JSON.stringify(redact && a.source ? canonical(a.source) : a.desired), '-s', 'user']);
+    if (a.op === 'create' || a.op === 'update') cmds.push(['mcp', 'add-json', a.name, JSON.stringify(redact ? redactConfig(a.source ? canonical(a.source) : a.desired) : a.desired), '-s', 'user']);
   }
   return cmds;
-}
-
-// Same op/order logic as commandsFor, kept separate so a failed command can be traced
-// back to the server name without depending on redact or on `-s user`'s exact position.
-function namesFor(actions) {
-  const names = [];
-  for (const a of actions) {
-    if (a.op === 'delete' || a.op === 'update') names.push(a.name);
-    if (a.op === 'create' || a.op === 'update') names.push(a.name);
-  }
-  return names;
 }
 
 // One bad entry (a name the `claude` CLI itself refuses, say) must not abort every other
 // entry in this target, or the other targets after it: run every command, collect what
 // failed, and let the caller decide what to report and what to retry next time.
-export function write(actions, { dryRun } = {}) {
+export function write(actions, { dryRun, timeout = 10000 } = {}) {
   if (dryRun) return { commands: commandsFor(actions, { redact: true }), failures: [] };
-  const cmds = commandsFor(actions);
-  const names = namesFor(actions);
   const failures = [];
-  for (let i = 0; i < cmds.length; i++) {
-    try { execFileSync('claude', cmds[i], { stdio: ['ignore', 'pipe', 'pipe'] }); }
-    catch (e) {
-      // e.message embeds the whole argv, and for add-json that argv carries the resolved
-      // secret. Never fall back to it: report the CLI's own stderr, or the exit status.
-      const stderr = e.stderr?.toString().trim();
-      failures.push({ name: names[i], op: cmds[i][1], error: stderr || `claude mcp ${cmds[i][1]} exited ${e.status ?? e.signal ?? 'abnormally'}` });
+  for (const action of actions) {
+    let removed = false;
+    for (const cmd of commandsFor([action])) {
+      try {
+        execFileSync('claude', cmd, { stdio: ['ignore', 'pipe', 'pipe'], timeout });
+        if (cmd[1] === 'remove') removed = true;
+      } catch (e) {
+        const failure = { name: action.name, op: cmd[1], error: processFailure(`claude mcp ${cmd[1]}`, e) };
+        // Never attempt add after a failed remove. If replacement fails after removal,
+        // restore exactly the previous native entry, not a re-rendered source template.
+        if (removed && action.op === 'update') {
+          const previous = action.native ?? action.state;
+          if (previous) {
+            try {
+              execFileSync('claude', ['mcp', 'add-json', action.name, JSON.stringify(previous), '-s', 'user'], { stdio: ['ignore', 'pipe', 'pipe'], timeout });
+              failure.rollback = 'restored';
+            } catch (restoreError) {
+              failure.rollback = 'failed';
+              failure.rollbackError = processFailure('claude rollback', restoreError);
+            }
+          } else failure.rollback = 'unavailable';
+        }
+        failures.push(failure);
+        break;
+      }
     }
   }
-  return { commands: cmds, failures };
+  return { commands: commandsFor(actions, { redact: true }), failures };
 }
 
 // `claude mcp add-json` refuses a name with anything outside [A-Za-z0-9_-]; `claude mcp

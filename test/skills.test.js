@@ -44,11 +44,12 @@ test('a name clash between agents is reported and nothing is touched', () => {
   mk(codex, 'deploy', '---\nname: deploy\n---\nvia Vercel\n');
   const p = skills.plan();
   const ops = Object.fromEntries(p.map((i) => [i.agent, i.op]));
-  assert.equal(ops.claude, 'adopt', 'the first one seen would be adopted');
+  assert.equal(ops.claude, 'collision', 'the first copy is not an arbitrary winner');
   assert.equal(ops.codex, 'collision', 'the second is a different skill with the same name');
   skills.apply(p);
   assert.match(fs.readFileSync(path.join(codex, 'deploy', 'SKILL.md'), 'utf8'), /Vercel/, 'the clashing skill is left exactly where it was');
-  assert.match(fs.readFileSync(path.join(skills.SHARED, 'deploy', 'SKILL.md'), 'utf8'), /Railway/);
+  assert.match(fs.readFileSync(path.join(claude, 'deploy', 'SKILL.md'), 'utf8'), /Railway/);
+  assert.equal(fs.existsSync(path.join(skills.SHARED, 'deploy')), false);
 });
 
 test('a clash against a skill already shared is reported and left alone', () => {
@@ -92,4 +93,32 @@ test('tool-native skills are never adopted', () => {
   assert.equal(skills.isNative(codex, 'hatch-pet'), true);
   assert.equal(skills.isNative(codex, '.system'), true);
   assert.equal(skills.isNative(codex, 'mine'), false);
+});
+
+test('a whole agent directory linked to shared skills is already shared, never deduplicated', () => {
+  reset();
+  mk(skills.SHARED, 'safe');
+  fs.mkdirSync(path.dirname(claude), { recursive: true });
+  fs.symlinkSync(skills.SHARED, claude);
+  assert.deepEqual(skills.plan(), []);
+  assert.ok(fs.existsSync(path.join(skills.SHARED, 'safe', 'SKILL.md')));
+});
+
+test('adoption and deduplication restore the original directory after link failure', () => {
+  for (const duplicate of [false, true]) {
+    reset();
+    mk(claude, 'restore');
+    if (duplicate) mk(skills.SHARED, 'restore');
+    const plan = skills.plan();
+    const symlink = fs.symlinkSync;
+    fs.symlinkSync = () => { throw Object.assign(new Error('injected failure'), { code: 'EACCES' }); };
+    try { assert.throws(() => skills.apply(plan), /restored/); }
+    finally { fs.symlinkSync = symlink; }
+    assert.ok(fs.lstatSync(path.join(claude, 'restore')).isDirectory());
+    assert.ok(fs.existsSync(path.join(claude, 'restore', 'SKILL.md')));
+    assert.equal(fs.existsSync(path.join(skills.SHARED, 'restore')), duplicate);
+    assert.equal(fs.readdirSync(claude).some((n) => n.startsWith('.eag-skill-')), false);
+    skills.apply(skills.plan());
+    assert.ok(fs.lstatSync(path.join(claude, 'restore')).isSymbolicLink());
+  }
 });

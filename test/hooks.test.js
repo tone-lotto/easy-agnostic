@@ -247,3 +247,22 @@ test('the launcher prefers the installed eag over the package it was generated f
   execFileSync('/bin/sh', [f], { env: { PATH: '/nonexistent', HOME: process.env.HOME } });
   assert.equal(fs.readFileSync(marker, 'utf8').trim(), 'apply --quiet', 'the installed eag ran, with a PATH that has nothing on it');
 });
+
+test('trust queries bound both hung children and excessive output', async () => {
+  cxReset(); hooks.installCodex();
+  const bin = path.join(dir, 'trust-failure-bin');
+  fs.mkdirSync(bin, { recursive: true });
+  const before = process.env.PATH;
+  try {
+    process.env.PATH = bin;
+    for (const body of [
+      "process.on('SIGTERM',()=>{}); setInterval(()=>{},1000);",
+      "process.stdout.write('x'.repeat(5 * 1024 * 1024)); setInterval(()=>{},1000);",
+    ]) {
+      fs.writeFileSync(path.join(bin, 'codex'), `#!${process.execPath}\n${body}\n`, { mode: 0o755 });
+      const start = Date.now();
+      assert.equal(await hooks.codexTrust({ timeoutMs: 300 }), null);
+      assert.ok(Date.now() - start < 2000);
+    }
+  } finally { process.env.PATH = before; cxReset(); }
+});

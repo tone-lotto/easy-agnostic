@@ -1,6 +1,7 @@
 import { c } from '../util.js';
-import { VERSION, installKind, latestVersion, selfUpdate, newer } from '../update.js';
-import { run as hookRun } from './hook.js';
+import { VERSION, ENTRY, installKind, latestVersion, selfUpdate, newer } from '../update.js';
+import { runCommand } from '../process.js';
+import { processFailure } from '../redact.js';
 
 // `eag update`: install the latest version in place and refresh what depends on the
 // installed files (the launcher, the shell file, the shipped skill).
@@ -21,7 +22,10 @@ export async function run(_args, flags) {
   if (!r.ok) { console.log(`${c.bad('failed')} ${r.reason}`); return 1; }
   console.log(`${c.ok('updated')} ${VERSION} → ${latest}`);
   // The new version's files, not this one's: hand over to the installed binary.
-  const { execFileSync } = await import('node:child_process');
-  try { execFileSync('eag', ['hook', 'install'], { stdio: 'inherit' }); } catch { await hookRun(['install'], {}); }
+  try { runCommand(process.execPath, [ENTRY, 'hook', 'install'], { stdio: 'inherit', timeout: 60000 }); }
+  catch (e) {
+    console.log(`${c.warn('installed, but hook refresh failed')}: ${processFailure('eag hook install', e)}. Run eag hook install again.`);
+    return 1;
+  }
   return 0;
 }

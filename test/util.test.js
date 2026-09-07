@@ -33,6 +33,26 @@ test('writeFileAtomic replaces the contents of an existing file', () => {
   assert.deepEqual(temps(d), []);
 });
 
+test('conditional replacement refuses stale content and concurrent creation', () => {
+  const d = dir('stale');
+  const f = write(path.join(d, 'config'), 'external edit');
+  assert.throws(() => writeFileAtomic(f, 'replacement', 0o600, { expected: 'planned value' }), /changed before replacement/);
+  assert.throws(() => writeFileAtomic(f, 'replacement', 0o600, { expected: null }), /changed before replacement/);
+  assert.equal(read(f), 'external edit');
+  assert.deepEqual(temps(d), []);
+  writeFileAtomic(f, 'replacement', 0o600, { expected: 'external edit' });
+  assert.equal(read(f), 'replacement');
+});
+
+test('a dangling config symlink is refused, not detached', () => {
+  const d = dir('dangling');
+  const f = path.join(d, 'config');
+  fs.symlinkSync(path.join(d, 'absent'), f);
+  assert.throws(() => writeFileAtomic(f, 'replacement'), /dangling config symlink/);
+  assert.ok(fs.lstatSync(f).isSymbolicLink());
+  assert.deepEqual(temps(d), []);
+});
+
 // The temp holds the whole payload, secrets included: a throw between open and rename must
 // not leave it lying around under a predictable name. The rename is the case that matters,
 // because by then the temp exists and is full; aiming the write at a directory is the one
@@ -124,9 +144,9 @@ test('a write through a symlink follows the link instead of replacing it', () =>
   assert.deepEqual(temps(d), []);
 });
 
-// The temp name is predictable (<file>.eag-tmp-<pid>), so a symlink planted there would
-// make the write land on someone else's file. It is removed and re-created with "wx".
-test('a symlink planted at the temp path is dropped, never followed', () => {
+// Legacy predictable names may belong to another process. New writers neither use
+// nor delete them; exclusive UUID names protect their own payload.
+test('a symlink planted at the legacy temp path is neither followed nor removed', () => {
   const d = dir('temp-symlink');
   const victim = write(path.join(d, 'victim.txt'), 'untouched\n');
   const f = write(path.join(d, 'config.toml'), 'old\n');
@@ -137,8 +157,8 @@ test('a symlink planted at the temp path is dropped, never followed', () => {
 
   assert.equal(read(f), 'new\n');
   assert.equal(read(victim), 'untouched\n', 'the planted symlink target must not be written');
-  assert.equal(exists(tmp), false);
-  assert.deepEqual(temps(d), []);
+  assert.ok(fs.lstatSync(tmp).isSymbolicLink());
+  assert.deepEqual(temps(d), [path.basename(tmp)]);
 });
 
 test('a stale temp file left by an earlier crash does not block the next write', () => {
@@ -147,7 +167,8 @@ test('a stale temp file left by an earlier crash does not block the next write',
   write(`${f}.eag-tmp-${process.pid}`, 'garbage\n');
   writeFileAtomic(f, 'new\n');
   assert.equal(read(f), 'new\n');
-  assert.deepEqual(temps(d), []);
+  assert.equal(read(`${f}.eag-tmp-${process.pid}`), 'garbage\n');
+  assert.deepEqual(temps(d), [`config.toml.eag-tmp-${process.pid}`]);
 });
 
 test('writeJson writes indented json with a trailing newline and the mode asked for', () => {

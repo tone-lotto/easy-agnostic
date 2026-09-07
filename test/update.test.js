@@ -62,3 +62,29 @@ test('npmBin prefers the npm next to the running node', () => {
   assert.equal(b, fs.existsSync(beside) ? beside : 'npm');
   assert.ok(path.isAbsolute(b) || b === 'npm');
 });
+
+test('registry results must be exact stable versions, never npm specs', async () => {
+  const realFetch = globalThis.fetch;
+  try {
+    for (const version of ['latest', '1.2.3 --force', 'https://example.com/x.tgz', '../other', '01.2.3', '1.2.3-beta.1', null, {}]) {
+      globalThis.fetch = async () => ({ ok: true, json: async () => ({ version }) });
+      assert.equal(await update.latestVersion(), null);
+      assert.equal(update.selfUpdate(version).ok, false);
+      assert.equal(update.newer(version, '1.0.0'), false);
+    }
+  } finally { globalThis.fetch = realFetch; }
+});
+
+test('registry deadline includes reading the response body', async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (_u, { signal }) => ({
+    ok: true,
+    json: () => new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('aborted')))),
+  });
+  try { assert.equal(await update.latestVersion({ timeoutMs: 30 }), null); }
+  finally { globalThis.fetch = realFetch; }
+});
+
+test('background installs are refused even for a valid version', () => {
+  assert.match(update.selfUpdate('99.0.0', { detached: true }).reason, /background installation is disabled/);
+});

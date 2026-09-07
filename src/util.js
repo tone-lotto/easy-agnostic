@@ -1,38 +1,54 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 export const SECRET_REF = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
 export const WHOLE_REF = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
+export function shellQuote(value) {
+  if (typeof value !== 'string' || value.includes('\0')) throw new Error('shell value must be a string without NUL characters');
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
 
 export function readJson(file, fallback) {
-  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return fallback; throw new Error(`${file}: ${e.message}`); }
+  return readJsonSnapshot(file, fallback).value;
+}
+export function readJsonSnapshot(file, fallback) {
+  try { const text = fs.readFileSync(file, 'utf8'); return { value: JSON.parse(text), text }; }
+  catch (e) { if (e.code === 'ENOENT') return { value: fallback, text: null }; throw new Error(`${file}: ${e instanceof SyntaxError ? 'invalid JSON (content withheld)' : e.code || 'could not read file'}`); }
 }
 export function exists(file) { try { fs.statSync(file); return true; } catch { return false; } }
 export function ensureDir(dir) { fs.mkdirSync(dir, { recursive: true }); }
 
-export function writeFileAtomic(file, text, mode) {
+export function writeFileAtomic(file, text, mode, options = {}) {
   // temp + rename replaces the inode, so resolve a symlink first: a config kept in a
   // dotfiles repo must keep receiving writes instead of being detached. Without an
   // explicit mode, restore exactly what the file had (umask must not narrow a user's
   // own permissions); a new file gets 0644 & ~umask.
   let target = file;
-  try { target = fs.realpathSync(file); } catch { /* new file, or a dangling symlink */ }
+  try { target = fs.realpathSync(file); } catch (e) {
+    if (e.code !== 'ENOENT') throw e;
+    try { if (fs.lstatSync(file).isSymbolicLink()) throw new Error('refusing to replace a dangling config symlink'); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
   ensureDir(path.dirname(target));
   let keep;
   if (mode === undefined) { try { keep = fs.statSync(target).mode & 0o777; } catch { /* new file */ } }
   const want = mode ?? keep;
-  const tmp = `${target}.eag-tmp-${process.pid}`;
+  const tmp = `${target}.eag-tmp-${randomUUID()}`;
   let fd;
   try {
-    // The temp name is predictable, so drop whatever is there (a stale temp, or a symlink
-    // someone planted) and create ours exclusively: "wx" never follows a symlink.
-    fs.rmSync(tmp, { force: true });
+    // Unique exclusive creation: never delete another writer's temporary file.
     fd = fs.openSync(tmp, 'wx', want ?? 0o644);
     fs.writeFileSync(fd, text);
     // open()'s mode applies only on creation and the umask narrows it: set it on the
     // descriptor so an asked-for 0600 really is 0600 and a preserved mode is exact.
     if (want !== undefined) fs.fchmodSync(fd, want);
     fs.closeSync(fd); fd = undefined;
+    if (Object.hasOwn(options, 'expected')) {
+      let current = null;
+      try { current = fs.readFileSync(target, 'utf8'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+      if (current !== options.expected) throw new Error('configuration changed before replacement; retry');
+    }
     fs.renameSync(tmp, target);
   } catch (e) {
     if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* already gone */ } }
@@ -46,11 +62,11 @@ export function backup(file, backupDir, label) {
   if (!exists(file)) return null;
   ensureDir(backupDir);
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const dest = path.join(backupDir, `${label}-${stamp}${path.extname(file)}`);
+  const dest = path.join(backupDir, `${label}-${stamp}-${randomUUID()}${path.extname(file)}`);
   // Native files can hold literal secrets: keep backups as private as the state snapshot.
-  fs.writeFileSync(dest, fs.readFileSync(file), { mode: 0o600 });
+  fs.writeFileSync(dest, fs.readFileSync(file), { mode: 0o600, flag: 'wx' });
   // keep the last 10 per label
-  const old = fs.readdirSync(backupDir).filter((f) => f.startsWith(`${label}-`)).sort().reverse().slice(10);
+  const old = fs.readdirSync(backupDir).filter((f) => f.startsWith(`${label}-`) && f !== path.basename(dest)).sort().reverse().slice(9);
   for (const f of old) fs.rmSync(path.join(backupDir, f), { force: true });
   return dest;
 }

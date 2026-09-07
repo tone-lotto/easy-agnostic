@@ -211,6 +211,23 @@ test('overrides land in the table and win over what render produced', () => {
   assert.deepEqual(render('svc', { url: 'https://a.test' }, { url: 'https://b.test' }, noWarn), { url: 'https://b.test' });
 });
 
+test('overrides cannot bypass validation or secret resolution', () => {
+  for (const overrides of [[], null, { command: 42 }, { command: 'node' },
+    { startup_timeout_sec: -1 }, { enabled: 'false' }, { env_vars: ['BAD-NAME'] },
+    { bearer_token_env_var: '${TOKEN}' }, { env_http_headers: { X: 12 } },
+    { http_headers: { X: 'value\r\nInjected: yes' } }]) {
+    assert.throws(() => render('svc', { url: 'https://example.com' }, overrides, noWarn), /invalid Codex|overrides must/);
+  }
+  process.env.OVERRIDE_TEST_TOKEN = 'short-private';
+  try {
+    const result = render('svc', { url: 'https://example.com' }, { http_headers: { X: '${OVERRIDE_TEST_TOKEN}' } }, noWarn);
+    assert.equal(result.http_headers.X, 'short-private');
+    assert.equal(result[HAS_LITERAL], true);
+    process.env.OVERRIDE_TEST_TOKEN = 'bad\r\nheader';
+    assert.throws(() => render('svc', { url: 'https://example.com' }, { http_headers: { X: '${OVERRIDE_TEST_TOKEN}' } }, noWarn), /invalid Codex/);
+  } finally { delete process.env.OVERRIDE_TEST_TOKEN; }
+});
+
 test('toSource round-trips render for the http, sse and stdio shapes', () => {
   const cases = [
     ['http with both header pointer shapes', {

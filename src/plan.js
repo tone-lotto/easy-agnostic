@@ -1,10 +1,12 @@
 import { scopePaths, assertProjectScope } from './paths.js';
-import { loadSource, targetEnabled, serverAllowed, serverOverrides, secretsMode, validateServer } from './source.js';
+import { loadSource, sourceGuard, targetEnabled, serverAllowed, serverOverrides, secretsMode, validateServer } from './source.js';
 import { loadState, saveState } from './state.js';
 import { planMerge } from './merge.js';
 import * as codex from './adapters/codex.js';
 import * as claude from './adapters/claude.js';
-import { exists } from './util.js';
+import { exists, backup, deepEqual } from './util.js';
+import { withMutationLock } from './lock.js';
+import fs from 'node:fs';
 import path from 'node:path';
 
 export const TARGETS = {
@@ -36,6 +38,7 @@ export function buildPlan(targetId, { root, prefer = null, warn = () => {} } = {
   if (!t) throw new Error(`unknown target ${targetId}`);
   const user = loadSource(scopePaths('user'));
   const proj = t.scope === 'project' ? loadSource(assertProjectScope(scopePaths('project', root))) : null;
+  const guards = [sourceGuard(user.paths), ...(proj ? [sourceGuard(proj.paths)] : [])];
   // A project without its own agents.json must not reset the user's switches: loadSource
   // hands back DEFAULT_AGENTS when the file is missing, and spreading those last would
   // re-enable an agent the user turned off machine-wide.
@@ -72,11 +75,23 @@ export function buildPlan(targetId, { root, prefer = null, warn = () => {} } = {
   const actions = planMerge({ desired, state, native: native.servers, foreign, locked: native.locked, prefer });
   // Unrendered entry (secrets as ${NAME}); adapters use it for output that must not carry resolved values.
   for (const a of actions) if (Object.hasOwn(srcServers, a.name)) a.source = srcServers[a.name];
-  return { ...base, actions, errors, skippedByPolicy, native, stateDir, state, desired };
+  return { ...base, actions, errors, skippedByPolicy, native, stateDir, state, desired, verifySource: () => guards.forEach((guard) => guard()) };
 }
 
 export function applyPlan(plan, { dryRun = false, backupDir } = {}) {
+  if (dryRun) return applyPlanLocked(plan, { dryRun, backupDir });
+  return withMutationLock(() => applyPlanLocked(plan, { dryRun, backupDir }));
+}
+
+function applyPlanLocked(plan, { dryRun, backupDir }) {
   if (plan.skipped) return { skipped: plan.skipped };
+  if (plan.errors?.length) throw new Error('refusing to apply a plan with validation errors');
+  if (plan.scope === 'project') assertProjectScope(scopePaths('project', plan.root));
+  plan.verifySource?.();
+  const freshNative = plan.agent === 'codex' ? codex.read(plan.scope, plan.root) : claude.read();
+  const unchanged = plan.agent === 'codex' ? freshNative.text === plan.native.text
+    : deepEqual([...freshNative.servers], [...plan.native.servers]);
+  if (!unchanged || !deepEqual(loadState(plan.stateDir, plan.targetId).servers, plan.state)) throw new Error('configuration changed since planning; retry eag apply');
   const newState = Object.assign(Object.create(null), plan.state); // a server named __proto__ must become an own key
   const entries = new Map(); // codex only: what the managed block must contain afterwards
   // The block is regenerated from `entries` alone, so every table already inside it starts
@@ -125,7 +140,7 @@ export function applyPlan(plan, { dryRun = false, backupDir } = {}) {
   let result;
   if (plan.agent === 'codex') {
     const needsWrite = writes.length > 0 || !plan.native.hasBlock && entries.size > 0;
-    if (needsWrite) result = codex.write(plan.scope, plan.root, entries, { backupDir, dryRun });
+    if (needsWrite) result = codex.write(plan.scope, plan.root, entries, { backupDir, dryRun, expectedText: plan.native.text });
     else {
       // Nothing to write, but the file may still carry a literal and may have been widened
       // since the last apply.
@@ -133,19 +148,20 @@ export function applyPlan(plan, { dryRun = false, backupDir } = {}) {
       result = { file: plan.native.file, changed: false, tightened };
     }
   } else {
+    if (!dryRun && writes.length) backup(plan.native.file, backupDir ?? backupDirFor(plan), 'claude-user');
     const w = claude.write(writes, { dryRun });
+    if (!dryRun && exists(plan.native.file)) fs.chmodSync(plan.native.file, fs.statSync(plan.native.file).mode & 0o600);
     result = { file: plan.native.file, commands: w.commands, failures: w.failures, changed: writes.length > 0 };
     if (!dryRun && writes.length) {
       // Re-read only the names this run actually wrote. Refreshing every name would pull a
       // hand edit that was just reported as a conflict into the snapshot, and the next apply
       // would read it as "the source changed" and overwrite the edit it had refused to touch.
       const written = new Set(writes.map((a) => a.name));
-      const opOf = new Map(writes.map((a) => [a.name, a.op]));
       for (const f of w.failures) {
         written.delete(f.name);
         // A delete that failed left the server in place. Keeping it in the snapshot is what
         // makes the next apply plan the delete again instead of calling it foreign forever.
-        if (opOf.get(f.name) === 'delete' && Object.hasOwn(plan.state, f.name)) newState[f.name] = plan.state[f.name];
+        if (Object.hasOwn(plan.state, f.name)) newState[f.name] = plan.state[f.name];
         else delete newState[f.name];
       }
       const fresh = claude.read();

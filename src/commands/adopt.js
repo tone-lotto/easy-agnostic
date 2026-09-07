@@ -11,6 +11,7 @@ import { setSecret, resolveSecret, backendName } from '../secrets.js';
 import { deepEqual, looksLikeSecret, refsIn, c } from '../util.js';
 import * as claude from '../adapters/claude.js';
 import * as codex from '../adapters/codex.js';
+import { redactConfig } from '../redact.js';
 
 // `pat` only as a whole token: PATH, NODE_PATH or PATTERN are not credentials.
 const SECRETISH_KEY = /(key|token|secret|pass|auth|credential|(?:^|[^a-z0-9])pat(?:[^a-z0-9]|$))/i;
@@ -104,7 +105,7 @@ export async function run(args, flags) {
     if (existing && !deepEqual(existing, entry) && !flags.force) {
       console.log(`${c.warn('conflict')} ${name}: already in source with different content; keeping source. Use --force to overwrite, or: eag mcp target ${name} ${agent} off`);
     } else {
-      if (!existing) { servers[name] = entry; changed = true; console.log(`${c.ok('adopt  ')} ${name} ${c.dim(entry.url || entry.command)}`); }
+      if (!existing) { servers[name] = entry; changed = true; const safe = redactConfig(entry); console.log(`${c.ok('adopt  ')} ${name} ${c.dim(safe.url || safe.command)}`); }
       else if (!deepEqual(existing, entry)) { servers[name] = entry; changed = true; console.log(`${c.ok('replace')} ${name} (--force)`); }
       else console.log(`${c.dim('same   ')} ${name}`);
       if (Object.keys(overrides).length) { agents.servers[name] = { ...(agents.servers[name] || {}), codex: overrides }; changed = true; }

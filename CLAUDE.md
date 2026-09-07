@@ -43,7 +43,8 @@ src/adapters/codex.js   read/render/write managed block in config.toml; toSource
 src/adapters/claude.js  read ~/.claude.json, write via `claude mcp add-json|remove`
 src/adapters/pi.js      read-only checks (pi-mcp-adapter reads the source directly)
 src/commands/*.js       setup (init+adopt+apply+adopt skills+all-projects+hook+doctor --fix), init, adopt, status, apply, hook, mcp, secret, env, doctor
-scripts/e2e.sh          sandbox end-to-end run from copies of the real configs
+scripts/e2e-fixtures.mjs fixture-only integration runner with fake native CLIs
+scripts/e2e.sh          shared integration scenarios; optional live-native run from config copies
 skills/eag/SKILL.md     eag's own skill, linked into ~/.agents/skills by `hook install` so agents can drive it
 test/*.test.js          unit tests (node --test); test/helpers.js holds the sandbox harness
 ```
@@ -71,7 +72,8 @@ Two layers, and both must pass before any change to merge, adapters, plan or sec
 
 ```bash
 npm test                                        # unit tests; no agent, no keychain, no network
-npm run e2e                                     # scripts/e2e.sh /tmp/eag-sandbox
+npm run e2e                                     # committed fixtures, fake CLIs, no personal configs
+npm run e2e:live                                # optional real-native CLI run from config copies
 KEEP_SANDBOX=1 scripts/e2e.sh /tmp/eag-sandbox  # keep the sandbox for the manual scenarios; rm -rf it afterwards
 ```
 
@@ -79,18 +81,20 @@ KEEP_SANDBOX=1 scripts/e2e.sh /tmp/eag-sandbox  # keep the sandbox for the manua
 
 The e2e is the second layer:
 
+The default `npm run e2e` creates a unique temporary directory from `test/fixtures`, uses deliberately narrow fake Claude/Codex CLIs, forces the file secret backend, and runs the shared scenarios below. Success cleans up the temporary directory; failures retain synthetic artifacts for diagnosis. It does not claim to verify real agent trust or live SessionStart execution. CI runs unit and fixture integration tests on macOS/Linux and Node 20/22/24. The optional live-native command still tests installed agent CLIs against isolated copies as described below.
+
 It builds a sandbox from copies of `~/.codex/config.toml` and of the `mcpServers` part of `~/.claude.json` (both must exist), points every path at it via env vars (`EAG_HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `PI_CODING_AGENT_DIR`, `EAG_SECRET_SERVICE=eag-test`, and `EAG_PROJECT` unset so project scope follows the sandbox cwd; only your shell rc is still read, read-only) and runs init, adopt, status, dry-run, apply, idempotent apply, project apply, doctor, plus `setup` end to end in a second, disposable sandbox. It asserts that the five files the run must produce exist, that the dry-run output carries no resolved secret, and that every file that can hold literals is `0600` (the applies that matter run under `umask 022` because the sandbox's own `umask 077` would hide a regression). The `eag-test` secrets are removed and the sandbox deleted when the script exits; with `KEEP_SANDBOX=1` the sandbox stays but the secrets are still removed, so set them again before running an apply inside it. Never run `eag apply` against the real home while developing, and never run project-scope commands from this checkout: `.mcp.json`, `.agents/` and `.codex/` are gitignored here precisely because a project-scope apply would generate them, possibly with literal credentials.
 
 Scenarios v0 handles and must keep working, all automated by the script: adopt with secret extraction (happens when your real configs hold literals; a reference the sandbox cannot resolve gets a placeholder so the run tests the write paths, not your keychain); locked entry in Codex left alone; an unknown flag refused instead of ignored; a source without `mcpServers` refused instead of read as empty; a damaged managed block refusing the write; a block entry absent from `.state` surviving an unrelated write; apply, idempotent apply, redacted dry-run; a missing secret blocks the Claude write (always resolves) but not the Codex one when the reference can stay a native env-var pointer; `mcp rm` propagates deletes to every target; a hand edit in the managed block detected as a conflict and resolved with `--prefer native` then `--prefer source`; project apply generating `.codex/config.toml` and extending `.gitignore` idempotently; file modes including the re-tightening of a widened file. A write failure for one entry (a name the agent's own CLI refuses, say) is reported and skipped, never fatal to the rest of the run — the script's own adopted-from-real-config entries exercise this on a machine that has one.
 
 ## Staying in sync
 
-`eag apply` is a one-shot write, so an agent already running keeps the config it started with. `eag hook install` (also run by `eag setup`) generates `~/.agents/shell-init.sh` and sources it from the shell rc: it evaluates `eag env` and defines one wrapper per agent binary that runs `eag apply --quiet` before handing over with `command <bin> "$@"`.
+`eag apply` is a one-shot write, so an agent already running keeps the config it started with. `eag hook install` (also run by `eag setup`) generates `~/.agents/shell-init.sh` and sources it from the shell rc. Wrappers use a subshell, sync before launch, resolve `eag env --target AGENT`, and hand over with `command <bin> "$@"`. Missing launch credentials stop the wrapper without exporting partial values. Sourcing the file itself does not read or export credentials.
 
 Rules that make it survivable:
 - **Only what is installed gets wrapped.** A function named after a missing binary would make `command -v codex` succeed for a Codex that is not there. `src/shell.js` scans PATH; every `eag apply` regenerates the file, so an agent installed later is picked up without the user touching their rc again.
-- **Pi is never wrapped** — it reads the source itself, so it cannot be stale.
-- **No secret is written into the generated file.** It runs `eval "$(command eag env)"` at shell start; the values stay in the secret store.
+- **Pi is wrapped for credentials only** — it reads the source itself, so its wrapper skips apply.
+- **No secret is written into the generated file or parent shell.** Each launch resolves only that agent's referenced secrets in a subshell; shell tracing is disabled before resolution. Restart old shells after upgrading to clear previously exported values.
 - **Everything is guarded on `command -v eag`**, so uninstalling the package cannot break a shell.
 - **`--quiet` reports a problem once.** It runs on every agent launch, so a chronic problem (an entry `claude mcp add-json` refuses, an unresolved conflict) would otherwise print the same line forever. `apply.js` keeps the last reported set in `.state/quiet.json` and prints only when it changes.
 - **A refresh only ever adds a wrapper, never removes one.** The SessionStart launcher runs `eag apply` with the minimal PATH a GUI launch has, where no agent binary is visible; rebuilding the list from that would delete every wrapper and stop terminal launches syncing. Only an explicit `eag hook install` shrinks the list.
@@ -110,7 +114,7 @@ eag is run by hooks and wrappers that have no PATH and live on after the thing t
 - **npx**: evictable cache, never on PATH. Never updated in place; `doctor` calls it a problem.
 - **dev** (a checkout under `npm link`, detected by a `.git` above the package): never overwritten by npm; `update` says to use git. This machine is one.
 - The launcher tries the installed `eag` (npm's global bin dir, baked in at install) before the package it was generated from, always through the resolved node. The shell file adds that bin dir to PATH before looking for `eag`.
-- `apply` calls `checkThrottled()` (once a day, `.state/update.json`, 3 s timeout, offline keeps the last answer) and `selfUpdate(v, {detached: true})` for a global install. `EAG_NO_UPDATE=1` — set by the e2e — or `agents.json` `autoUpdate: false` disables it.
+- Updates are explicit through `eag update`; routine apply and launch hooks never check the registry or install packages. Legacy `autoUpdate` settings do not re-enable automatic installs. Only exact stable versions are accepted and npm lifecycle scripts are disabled.
 
 ## Agent operability
 
@@ -134,7 +138,7 @@ Four agents with no prior knowledge were given real tasks on a machine with eag 
 ## Roadmap
 
 - Phase 0 (done, and run for real on the maintainer's machine): Claude + Codex + Pi, user and project scope, unit tests, secrets by reference everywhere.
-- Phase 1: Cursor adapter, `doctor --fix` coverage, native SessionStart hooks for the GUI/IDE launch path the shell cannot reach (Codex has a full lifecycle hook system; Claude Code takes one in settings.json), fish support in `src/shell.js`, adopt extracting credentials embedded in URLs, a hermetic e2e with versioned fixtures so a contributor without the real configs can run it.
+- Phase 1: Cursor adapter, further `doctor --fix` coverage, fish support in `src/shell.js`, and adoption of credentials embedded in URLs. Native SessionStart hooks and fixture-only integration tests are implemented.
 - Phase 2: `eag run <server>` stdio wrapper: inject secrets into the server process and do OAuth once with a shared token store (embed mcp-remote).
 - Phase 3: Gemini/Antigravity and OpenCode adapters, Claude permissions to Codex execpolicy rules (opt-in), `eag pack` exporting the source as an Agent Plugins 1.0 plugin.
 

@@ -43,6 +43,8 @@ Run `eag <command> --help` for every flag. Exit codes everywhere:
 - **Claude Code user scope gets resolved values by default** (an app-launched agent has no shell
   environment). `eag apply` says so per secret. Terminal-only users can set
   `{"claude": {"secrets": "env"}}` in `~/.agents/agents.json` to keep references.
+- **Terminal credentials are launch-scoped.** `eag hook install` creates wrappers that resolve `eag env --target AGENT` inside a subshell at each launch. Do not add `eval "$(eag env)"` to the shell rc or paste env output: it contains credentials. Restart old terminals after upgrading to clear previously exported secrets. Missing required credentials stop a wrapped launch; store the missing value and retry. GUI launches do not inherit this wrapper environment.
+- **Updates are explicit.** Use `eag update --check` to inspect availability and `eag update` when an upgrade is requested. Routine syncs never install packages.
 - **Codex needs one-time approvals** for a project (`.codex/config.toml` is ignored until the repo is
   trusted inside Codex) and for eag's launch hook (`/hooks` or Settings → Hooks). `eag doctor` says which.
 - **Entries eag did not write are never touched.** Codex tables outside the marker block show as

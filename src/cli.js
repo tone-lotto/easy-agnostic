@@ -37,11 +37,10 @@ Usage: eag <command> [options]
   secret set <NAME> [--value V | --from-env] | ls | rm <NAME>
                                         values for \${NAME} references, kept in the OS secret store; with no flag the
                                         value is read from stdin (pipe) or prompted. --value lands in shell history.
-  env                                   print "export NAME=..." lines for every referenced secret
+  env [--target claude|codex|pi]        print secret exports; optional target filter for launch subshells
   instructions [--dry-run] [--prefer agents|claude] [--json]
                                         sync project AGENTS.md and CLAUDE.md bidirectionally
-  update [--check]                      install the latest version in place; every apply also checks once a day and
-                                        updates a global install in the background (agents.json "autoUpdate": false stops it)
+  update [--check]                      explicitly install the latest stable version; --check only reports
   doctor [--fix]                        checks skills, instruction sync, Codex trust, Pi adapter, secrets
   --version                             print the version
 
@@ -78,7 +77,7 @@ const COMMAND_FLAGS = {
   hook: ['dry-run'],
   mcp: ['scope', 'url', 'header', 'command', 'args', 'arg', 'env', 'cwd', 'type', 'force', 'json'],
   secret: ['value', 'from-env'],
-  env: [],
+  env: ['target'],
   instructions: ['dry-run', 'prefer', 'json'],
   skills: ['scope', 'json'],
   doctor: ['fix', 'json', 'scope'],
@@ -147,12 +146,12 @@ eag mcp target <name> <claude|codex|pi> on|off [--scope user|project]
 eag secret ls | rm <NAME>
   Values for \${NAME} references, kept in the OS secret store (macOS keychain, secret-tool, or a 0600 file).
   With no flag the value is read from stdin when piped, or prompted without echo. --value lands in shell history.`,
-  env: `eag env
-  Print export lines for every referenced secret. Meant for eval "$(eag env)"; the generated shell-init.sh does it.`,
+  env: `eag env [--target claude|codex|pi]
+  Print secret export lines. --target filters by agent policy and fails if a required secret is missing.
+  Launch wrappers evaluate these only in a child shell. Do not paste this output or eval it in your main shell.`,
   update: `eag update [--check] [--force]
   Install the latest version in place (npm i -g) and refresh the launcher, shell file and skill. --check only
-  reports. Every eag apply also checks the registry at most once a day and, for a global install, updates in
-  the background unless agents.json has "autoUpdate": false.`,
+  reports. Routine apply and agent launches never check for or install updates.`,
   doctor: `eag doctor [--fix] [--scope user|project|all] [--json]
   --scope limits repairs, not diagnostic reads; default all. Project scope never repairs global skills.
   Wiring checks: skills symlinks, instruction sync, Codex trust, Pi adapter, hook trust, secrets that are set but not
@@ -190,5 +189,14 @@ export async function main(argv) {
     return 1;
   }
   const { run } = await mod();
-  return (await run(rest, flags)) ?? 0;
+  const readOnly = flags['dry-run'] || ['status', 'env', 'skills'].includes(cmd)
+    || (cmd === 'doctor' && !flags.fix) || (cmd === 'hook' && rest[0] === 'status')
+    || (cmd === 'mcp' && (!rest[0] || rest[0] === 'ls'))
+    || (cmd === 'secret' && (!rest[0] || rest[0] === 'ls'))
+    // update locks the install itself, then hands hook refresh to a new process.
+    // Holding the parent lock during that handoff would block the child.
+    || cmd === 'update';
+  if (readOnly) return (await run(rest, flags)) ?? 0;
+  const { withMutationLock } = await import('./lock.js');
+  return (await withMutationLock(() => run(rest, flags))) ?? 0;
 }

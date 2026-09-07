@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { execFileSync } from 'node:child_process';
+import { runCommand as execFileSync } from '../process.js';
 import { parse } from 'smol-toml';
 import { scopePaths, projectRoot, EAG_HOME, CLAUDE_CONFIG_DIR, CODEX_HOME } from '../paths.js';
 import { loadSource } from '../source.js';
@@ -198,7 +198,7 @@ async function checks(fix, root, out, scope) {
   const codexToml = path.join(CODEX_HOME, 'config.toml');
   if (exists(codexToml)) {
     let cfg = {};
-    try { cfg = parse(fs.readFileSync(codexToml, 'utf8')); out.push({ level: 'ok', msg: `codex: ${codexToml} parses` }); } catch (e) { out.push({ level: 'bad', msg: `codex: ${codexToml} is not valid TOML: ${e.message}` }); }
+    try { cfg = parse(fs.readFileSync(codexToml, 'utf8')); out.push({ level: 'ok', msg: `codex: ${codexToml} parses` }); } catch { out.push({ level: 'bad', msg: `codex: ${codexToml} is not valid TOML (content withheld)` }); }
     const trust = cfg.projects?.[root]?.trust_level;
     if (proj.hasMcp) out.push(trust === 'trusted' ? { level: 'ok', msg: `codex: project ${root} is trusted` } : { level: 'warn', msg: `codex: project ${root} is not trusted; Codex ignores .codex/config.toml until you trust it inside Codex` });
     try { execFileSync('codex', ['--version'], { stdio: 'ignore' }); out.push({ level: 'ok', msg: 'codex CLI runs' }); }

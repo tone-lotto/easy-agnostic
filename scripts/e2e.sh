@@ -372,7 +372,7 @@ printf '#!/bin/sh\nprintf "REAL codex ran\\n"\n' > "$SHELLTEST/bin/codex"; chmod
   A hook install > "$S/hook-install.txt"
   grep -q 'shell-init.sh' "$S/shellrc" || { echo "FAIL: hook install did not wire $S/shellrc" >&2; exit 1; }
   sh -n "$EAG_HOME/shell-init.sh" || { echo "FAIL: the generated shell file is not valid POSIX sh" >&2; exit 1; }
-  grep -q 'codex() { __eag_sync; command codex "$@"; }' "$EAG_HOME/shell-init.sh" || { echo "FAIL: no codex wrapper in the generated file" >&2; exit 1; }
+  grep -Fq 'codex() ( __eag_sync;' "$EAG_HOME/shell-init.sh" || { echo "FAIL: no codex subshell wrapper in the generated file" >&2; exit 1; }
   grep -q 'export [A-Z_]*=' "$EAG_HOME/shell-init.sh" && { echo "FAIL: the generated file carries a literal export; secrets must stay in the store" >&2; exit 1; }
   before="$(wc -c < "$S/shellrc")"; A hook install >/dev/null; after="$(wc -c < "$S/shellrc")"
   [ "$before" = "$after" ] || { echo "FAIL: hook install is not idempotent ($before -> $after bytes)" >&2; exit 1; }
@@ -431,6 +431,7 @@ A mcp add e2e-gui --url https://example.com/gui >/dev/null
 out="$(env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME="$HOME" \
   EAG_HOME="$EAG_HOME" CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" CODEX_HOME="$CODEX_HOME" \
   PI_CODING_AGENT_DIR="$PI_CODING_AGENT_DIR" EAG_SECRET_SERVICE="$EAG_SECRET_SERVICE" \
+  EAG_SECRET_BACKEND="${EAG_SECRET_BACKEND:-}" \
   EAG_SHELL_RC="$EAG_SHELL_RC" /bin/sh "$EAG_HOME/bin/eag-sync" 2>&1)"
 [ -z "$out" ] || { echo "FAIL: the launcher printed something; a hook must be silent:" >&2; printf '%s\n' "$out" >&2; exit 1; }
 grep -q '\[mcp_servers.e2e-gui\]' "$CODEX_HOME/config.toml" || { echo "FAIL: the launcher did not sync with a minimal environment" >&2; exit 1; }

@@ -296,6 +296,23 @@ test('a 0644 file whose block holds no literal stays 0644', () => {
   assert.equal(mode(cfg(r)), 0o644, 'a rewrite restores the mode the file had');
 });
 
+test('short literal credentials are private even without recognizable token shapes', () => {
+  for (const entry of [
+    { url: 'https://example.com', http_headers: { X: 'short' } },
+    { url: 'https://example.com?key=x' },
+    { command: 'node', env: { KEY: 'x' } },
+    { command: 'node', args: ['--password', 'x'] },
+  ]) {
+    const r = root();
+    put(cfg(r), '# user config\n');
+    codex.write('project', r, map({ demo: entry }), { backupDir: path.join(r, 'bk') });
+    assert.equal(mode(cfg(r)), 0o600);
+    fs.chmodSync(cfg(r), 0o444);
+    codex.ensureMode('project', r, map({ demo: entry }));
+    assert.equal(mode(cfg(r)), 0o400, 'tightening must not add owner write permission');
+  }
+});
+
 test('a config.toml eag creates itself starts at 0600', () => {
   const r = root();
   codex.write('project', r, ALPHA, { backupDir: path.join(r, 'bk') });

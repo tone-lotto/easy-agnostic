@@ -20,9 +20,9 @@ test('the generated file is valid POSIX shell', () => {
 
 test('it wraps exactly the binaries it is given, and calls through with command', () => {
   const text = shell.render(['claude', 'codex']);
-  assert.match(text, /^ {2}claude\(\) \{ __eag_sync; command claude "\$@"; \}$/m);
-  assert.match(text, /^ {2}codex\(\) \{ __eag_sync; command codex "\$@"; \}$/m);
-  assert.equal(/\bpi\(\)/.test(text), false, 'Pi reads the source itself and must not be wrapped');
+  assert.match(text, /^ {2}claude\(\) \( __eag_sync; .*command claude "\$@"; \)/m);
+  assert.match(text, /^ {2}codex\(\) \( __eag_sync; .*command codex "\$@"; \)/m);
+  assert.equal(/\bpi\(\)/.test(text), false, 'unrequested binaries are not wrapped');
   // `command` is what stops the wrapper calling itself forever.
   assert.match(text, /command claude/);
 });
@@ -36,13 +36,13 @@ test('everything is guarded on eag still being installed', () => {
 
 test('the secret values are never written into the generated file', () => {
   const text = shell.render(['claude']);
-  assert.match(text, /eval "\$\(command eag env\)"/, 'it evaluates eag env at shell start instead');
+  assert.match(text, /command eag env --target claude/, 'credentials are resolved inside the launch subshell');
   assert.equal(/export [A-Z_]+=/.test(text), false, 'no literal export belongs in a file on disk');
 });
 
-test('with no agent installed it still exports, and says why there is no wrapper', () => {
+test('with no agent installed it does not resolve or export secrets', () => {
   const text = shell.render([]);
-  assert.match(text, /eval "\$\(command eag env\)"/);
+  assert.equal(text.includes('command eag env'), false);
   assert.equal(/__eag_sync/.test(text), false);
   assert.match(text, /no agent binary on PATH yet/);
 });
@@ -68,7 +68,7 @@ test('installRc keeps what the user already had and appends one guarded block', 
   assert.equal(r.changed, true);
   const text = read(rc());
   assert.match(text, /^# mine\nexport FOO=bar\n/);
-  assert.match(text, /\[ -f "[^"]*shell-init\.sh" \] && \. "[^"]*shell-init\.sh"/);
+  assert.match(text, /\[ -f '[^']*shell-init\.sh' \] && \. '[^']*shell-init\.sh'/);
   assert.equal(text.split(shell.BEGIN).length - 1, 1);
 });
 
@@ -207,10 +207,10 @@ test('rcPath honours EAG_SHELL_RC, then picks by $SHELL', () => {
 // no exports, no wrappers — while doctor said sync-on-launch was wired.
 test('the generated file puts the global bin dir on PATH before looking for eag', () => {
   const text = shell.render(['codex'], { binDir: '/g/bin' });
-  const add = text.indexOf('PATH="/g/bin:$PATH"');
+  const add = text.indexOf('PATH=\'/g/bin\':"$PATH"');
   const look = text.indexOf('command -v eag');
   assert.ok(add > 0 && add < look, 'PATH is fixed before eag is looked up');
-  assert.match(text, /case ":\$PATH:" in \*":\/g\/bin:"\*\)/, 'and not added twice');
+  assert.match(text, /case ":\$PATH:" in \*':\/g\/bin:'\*\)/, 'and not added twice');
   shell.writeInit(['codex'], { binDir: '/g/bin' });
   assert.equal(shell.binDirInFile(), '/g/bin');
   shell.refreshInit();
