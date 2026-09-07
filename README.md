@@ -1,6 +1,6 @@
 # Easy Agnostic (`eag`): one source, many agents
 
-Keep MCP servers (and the wiring for skills and instructions) in sync across **Claude Code**, **Codex** and **Pi** from one source, without clobbering anything you edited by hand and without secrets in versioned files.
+Keep MCP servers, shared skills, and project instructions in sync across **Claude Code**, **Codex** and **Pi**, with conflict protection and credentials stored by reference.
 
 Status: v0 spike. Targets: Claude Code (user scope via `claude mcp`, project scope is native), Codex (managed block in `config.toml`, user + project), Pi (reads the source directly through `pi-mcp-adapter`, nothing to write).
 
@@ -32,7 +32,7 @@ Node 20 or newer, macOS or Linux. One run per machine; safe to run again any tim
 | `5/8 adopt skills` | a skill only one agent has moves to `~/.agents/skills`, where every agent reads it |
 | `6/8 make projects agnostic` | per-repo servers Claude kept to itself become that repo's own `.mcp.json` |
 | `7/8 hook install` | sync on launch: a shell wrapper for terminal launches, a `SessionStart` hook for app/IDE launches, and eag's own skill so agents know how to drive it |
-| `8/8 doctor --fix` | wiring checks; repairs symlinks and identical skill copies |
+| `8/8 doctor --fix` | wiring checks; repairs skill links and enables bidirectional instruction sync in the current project |
 
 It prints every file it touches. The whole thing takes about ten seconds.
 
@@ -73,8 +73,24 @@ eag adopt claude --all-projects   # per-repo Claude servers -> each repo's own .
 eag status                    # drift per agent
 eag apply --dry-run           # preview, then without --dry-run to write (user scope)
 eag hook install              # sync on launch; safe to re-run, undo with eag hook uninstall
-eag doctor --fix              # checks skills symlinks, @AGENTS.md, Codex trust, Pi adapter, secrets; --fix repairs what is safe
+eag doctor --fix              # repairs skill wiring and syncs project instruction files
+eag instructions --dry-run    # preview bidirectional AGENTS.md / CLAUDE.md sync
 ```
+
+## Bidirectional project instructions
+
+Run `eag instructions` in a project to keep root-level `AGENTS.md` and `CLAUDE.md` as mirrored files. This works without an MCP configuration. `eag doctor --fix` (including during setup) also enables this for the current project.
+
+- If only one file exists, eag creates the other with the same content.
+- Once enrolled, edit either file: the next `eag instructions` or `eag apply` propagates the change. Installed launch hooks and wrappers invoke apply; there is no live file watcher. An already-running agent may need to reload its instructions.
+- If both files have different edits, or both differ on first use, eag leaves them untouched. Reconcile them manually, or explicitly choose `eag instructions --prefer agents` or `eag instructions --prefer claude`.
+- Deleting a file after enrollment is a conflict, not a request to delete its counterpart. Prefer the surviving file to recreate it.
+- A `CLAUDE.md` containing only `@AGENTS.md` is migrated to a mirror. If it also contains Claude-specific instructions, eag replaces the import with a marked shared region and preserves everything outside it. Edit the shared region or AGENTS.md to sync in either direction; edits outside the region remain Claude-only. Damaged markers or circular imports stop the sync.
+- Symlinks are left alone and reported as errors. Nested instruction files are not scanned.
+
+`eag instructions --dry-run` previews without writing; `--json` returns metadata without instruction content, including on errors. Its exit codes are 0 for success, 1 for errors, 2 for pending changes in a preview, and 3 for conflicts. `eag status --exit-code` also reports instruction drift. MCP's `apply --prefer source|native` never resolves instruction conflicts.
+
+Enrollment and the last synchronized content hash live under `~/.agents/.state/instructions/`, keyed by the canonical project path. Previous versions of overwritten files are backed up there with mode `0600`. Sync uses a per-project lock and checks for edits before writing. After a killed sync, remove its reported stale lock only after confirming no sync is running. A fresh clone must be enrolled again; unregistered projects are not changed by launch hooks.
 
 ## How it works
 

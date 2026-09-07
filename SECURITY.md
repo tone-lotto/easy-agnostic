@@ -13,7 +13,7 @@ Open a [security advisory](https://github.com/tone-lotto/easy-agnostic/security/
 - **Files that can carry a literal are `0600`**: the state snapshots and their backups, `.secrets.index`, `.secrets.env`, and a `config.toml` eag creates or whose managed block ends up carrying a credential. Modes are only ever tightened; a rewrite otherwise restores the file's own mode and follows a symlink rather than replacing it.
 - **Nothing shown to a human carries a resolved value.** `eag apply --dry-run`, `eag status` and every error message print `${NAME}`. `eag secret set` does not echo what you type. The one command that does print values is `eag env`, because its whole job is to produce `export` lines — do not paste its output anywhere.
 - **`eag env` puts secrets in your shell environment**, which means every process you start inherits them. That is what makes `${VAR}` work in Codex and Pi; it is a deliberate trade, not an accident.
-- **No network, no telemetry, no daemon.** The only processes eag spawns are `claude`, `security`/`secret-tool`, `codex --version` and `git rev-parse`.
+- **Network and subprocesses.** There is no telemetry or daemon. Update checks contact the npm registry; global installs can update automatically using npm unless `autoUpdate: false` or `EAG_NO_UPDATE=1` is set. eag also invokes the agent CLIs, OS credential tools, Git, and npm for configuration, diagnostics, installation, and updates.
 
 ## Known limits
 

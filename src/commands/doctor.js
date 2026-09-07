@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { parse } from 'smol-toml';
 import { scopePaths, projectRoot, EAG_HOME, CLAUDE_CONFIG_DIR, CODEX_HOME } from '../paths.js';
 import { loadSource } from '../source.js';
-import { exists, readJson, refsIn, looksLikeSecret, mapStrings, writeFileAtomic, backup, sameTree, c } from '../util.js';
+import { exists, readJson, refsIn, looksLikeSecret, mapStrings, sameTree, c } from '../util.js';
 import { resolveSecret, backendName } from '../secrets.js';
 import * as pi from '../adapters/pi.js';
 import * as shell from '../shell.js';
@@ -14,6 +14,7 @@ import * as skillsMod from '../skills.js';
 import { installKind, onPath, globalBinDir, VERSION } from '../update.js';
 import * as hooks from '../hooks.js';
 import * as claude from '../adapters/claude.js';
+import { syncInstructions } from '../instructions.js';
 
 const MARK = { ok: c.ok('✓'), warn: c.warn('!'), bad: c.bad('✗'), info: c.dim('·'), fixed: c.ok('✓ fixed') };
 
@@ -182,20 +183,11 @@ async function checks(fix, root, out) {
   // From $HOME the "project" .agents/skills IS the user's shared dir: linking it again from
   // there reported every skill twice.
   if (!scopePaths('project', root).collides && exists(path.join(root, '.agents', 'skills'))) linkSkills(path.join(root, '.agents', 'skills'), path.join(root, '.claude', 'skills'), fix, out);
-  const agentsMd = path.join(root, 'AGENTS.md');
-  const claudeMd = path.join(root, 'CLAUDE.md');
-  if (exists(agentsMd)) {
-    const text = exists(claudeMd) ? fs.readFileSync(claudeMd, 'utf8') : '';
-    if (/^@AGENTS\.md\s*$/m.test(text)) out.push({ level: 'ok', msg: 'CLAUDE.md imports AGENTS.md' });
-    else if (fix) {
-      // The one destructive write that used to skip both the backup and the atomic rename:
-      // a failure mid-write left an empty CLAUDE.md with nothing to restore it from.
-      const bak = backup(claudeMd, path.join(EAG_HOME, '.state', 'backup'), 'claude-md');
-      writeFileAtomic(claudeMd, `@AGENTS.md\n${text ? `\n${text}` : ''}`);
-      out.push({ level: 'fixed', msg: `CLAUDE.md: added @AGENTS.md${text ? ' at the top' : ''}${bak ? ` (backup: ${bak})` : ''}` });
-    }
-    else out.push({ level: 'warn', msg: `AGENTS.md exists but CLAUDE.md does not import it (--fix prepends @AGENTS.md)` });
-  }
+  const instructions = syncInstructions(root, { dryRun: !fix });
+  if (instructions.op !== 'skipped') out.push({
+    level: instructions.op === 'conflict' ? 'bad' : instructions.op === 'noop' ? 'ok' : fix ? 'fixed' : 'warn',
+    msg: `instructions: ${instructions.message}${!fix && ['sync', 'enroll'].includes(instructions.op) ? ' (eag instructions applies this)' : ''}`,
+  });
 
   // codex
   const codexToml = path.join(CODEX_HOME, 'config.toml');

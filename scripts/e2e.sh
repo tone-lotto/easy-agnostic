@@ -470,6 +470,8 @@ SETUP_S="$S/setup-smoke"
 mkdir -p "$SETUP_S/cc" "$SETUP_S/codex" "$SETUP_S/agents" "$SETUP_S/pi" "$SETUP_S/proj"
 printf '{"mcpServers":{"setup-demo":{"type":"http","url":"https://example.com/setup-demo"}}}\n' > "$SETUP_S/cc/.claude.json"
 printf '[mcp_servers.setup-codex-demo]\nurl = "https://example.com/setup-codex-demo"\n' > "$SETUP_S/codex/config.toml"
+printf 'Shared project instructions\n' > "$SETUP_S/proj/AGENTS.md"
+printf '@AGENTS.md\n\nClaude-only instructions\n' > "$SETUP_S/proj/CLAUDE.md"
 (cd "$SETUP_S/proj" && git init -q)
 (
   cd "$SETUP_S/proj"
@@ -486,6 +488,16 @@ printf '[mcp_servers.setup-codex-demo]\nurl = "https://example.com/setup-codex-d
   grep -q 'setup-demo' "$SETUP_S/codex/config.toml" || { echo "FAIL: eag setup did not sync the claude-only server to Codex" >&2; exit 1; }
   grep -q 'shell-init.sh' "$SETUP_S/shellrc" || { echo "FAIL: eag setup did not wire the shell for sync-on-launch" >&2; exit 1; }
   sh -n "$SETUP_S/agents/shell-init.sh" || { echo "FAIL: the shell file eag setup generated is not valid POSIX sh" >&2; exit 1; }
+  grep -q 'easy-agnostic shared instructions' CLAUDE.md || { echo "FAIL: setup did not migrate the instruction import" >&2; exit 1; }
+  printf 'Shared edit from AGENTS\n' > AGENTS.md
+  A apply --json >/dev/null
+  grep -q 'Shared edit from AGENTS' CLAUDE.md || { echo "FAIL: AGENTS edits did not sync to Claude" >&2; exit 1; }
+  grep -q 'Claude-only instructions' CLAUDE.md || { echo "FAIL: instruction sync lost Claude-only content" >&2; exit 1; }
+  node -e 'const fs=require("fs");fs.writeFileSync("CLAUDE.md",fs.readFileSync("CLAUDE.md","utf8").replace("Shared edit from AGENTS","Shared edit from Claude"))'
+  A apply --json >/dev/null
+  grep -q 'Shared edit from Claude' AGENTS.md || { echo "FAIL: Claude edits did not sync to AGENTS" >&2; exit 1; }
+  grep -q 'Claude-only' AGENTS.md && { echo "FAIL: Claude-only content leaked into shared instructions" >&2; exit 1; }
+  A instructions --dry-run >/dev/null
 )
 rm -rf "$SETUP_S"
 

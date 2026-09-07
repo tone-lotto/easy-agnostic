@@ -11,6 +11,7 @@ import { refreshInit } from '../shell.js';
 import * as codex from '../adapters/codex.js';
 import { checkThrottled, selfUpdate, installKind, VERSION } from '../update.js';
 import { installSkill } from './hook.js';
+import { syncInstructions, instructionPaths } from '../instructions.js';
 
 // apply runs on every agent launch, which makes it the place an update can happen without
 // anyone remembering to. At most one registry call a day; a global install updates itself
@@ -67,6 +68,12 @@ function reportQuiet(problems) {
 }
 
 export async function run(_args, flags) {
+  const log = console.log;
+  try { return await runApply(_args, flags); }
+  finally { console.log = log; }
+}
+
+async function runApply(_args, flags) {
   const root = projectRoot();
   const scope = flags.scope || 'user';
   if (!['user', 'project', 'all'].includes(scope)) throw new Error(`--scope must be user, project or all (got "${scope}")`);
@@ -84,7 +91,8 @@ export async function run(_args, flags) {
   const json = flags.json ? { targets: [], warnings: [] } : null;
   if (json) console.log = (...a) => { if (!json.captured) json.captured = []; json.captured.push(a.join(' ')); }; // never mix text into JSON
   // A missing source used to apply as "nothing", exit 0, which is the wrong kind of quiet.
-  if (!exists(scopePaths('user').mcp)) {
+  const hasMcp = exists(scopePaths('user').mcp);
+  if (!hasMcp && !exists(instructionPaths(root).state)) {
     const msg = `${scopePaths('user').mcp} does not exist. Run: eag init (or eag setup)`;
     if (json) { process.stdout.write(`${JSON.stringify({ error: 'no source', hint: 'eag init' })}\n`); return 1; }
     process.stdout.write(`${c.bad('no source')} ${msg}\n`);
@@ -97,7 +105,19 @@ export async function run(_args, flags) {
   let conflicts = 0;
   let errors = 0;
   let failures = 0;
-  for (const id of targetsForScope(scope, root)) {
+  // Enrollment is explicit (instructions or doctor --fix). Launch hooks must not
+  // start mirroring files in an unrelated repository just because it was opened.
+  try {
+    const instructions = syncInstructions(root, { dryRun: dry, trackedOnly: true });
+    if (json) json.instructions = instructions;
+    if (instructions.op === 'conflict') { conflicts++; tell(`instructions: ${instructions.message}`); }
+    else if (instructions.op !== 'skipped' && instructions.op !== 'noop') say(`instructions: ${instructions.message}`);
+  } catch (e) {
+    errors++;
+    if (json) json.instructions = { op: 'error', message: e.message };
+    tell(`instructions: ${e.message}`);
+  }
+  for (const id of hasMcp ? targetsForScope(scope, root) : []) {
     if (only && !only.includes(TARGETS[id].agent)) continue;
     let printed = false;
     try {
@@ -145,10 +165,10 @@ export async function run(_args, flags) {
     }
   }
   for (const w of warnings) say(`${c.warn('warn')} ${w}`);
-  if (conflicts) tell(`${quiet ? '' : '\n'}${c.bad(`${conflicts} conflict(s) left untouched.`)} Resolve with ${c.bold('eag apply --prefer source|native')}, ${c.bold('eag adopt')}, or ${c.bold('eag mcp target <name> <agent> off')}.`);
+  if (conflicts) tell(`${quiet ? '' : '\n'}${c.bad(`${conflicts} conflict(s) left untouched.`)} For MCP use ${c.bold('eag apply --prefer source|native')}; for instructions use ${c.bold('eag instructions --prefer agents|claude')}.`);
   if (failures && !quiet) console.log(`\n${c.bad(`${failures} write(s) failed.`)} See "failed" above; a retry picks them up again.`);
   if (dry) say(`\n${c.dim('dry run: nothing written')}`);
-  if (!dry && !json) { try { await maybeUpdate({ tell, quiet }); } catch { /* never fail an apply over an update check */ } }
+  if (hasMcp && !dry && !json) { try { await maybeUpdate({ tell, quiet }); } catch { /* never fail an apply over an update check */ } }
   if (quiet && !dry) reportQuiet(problems);
   // Keep the generated shell file in step with what is installed, so an agent added after
   // `eag hook install` gets wrapped without the user having to remember this exists.

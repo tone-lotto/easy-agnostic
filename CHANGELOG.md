@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.0 — 2026-09-07
+
+- Add `eag instructions [--dry-run] [--prefer agents|claude] [--json]` for bidirectional project-root AGENTS.md / CLAUDE.md sync. Creates a missing counterpart, propagates single-sided edits, and refuses divergent edits or deletions until explicitly resolved.
+- `doctor --fix` enables instruction sync; `apply` and launch hooks sync enrolled projects, and `status` reports instruction drift. Hash-only machine-local baselines, private backups, locks, and pre-write checks protect existing content. Symlinks are left intact.
+- Legacy `@AGENTS.md` imports migrate without circular references. Additional Claude-specific text stays outside a marked shared region; shared edits flow in both directions without copying local instructions into AGENTS.md. Damaged markers and circular imports stop sync.
+- Instruction command errors support JSON, and `apply --json` restores the caller's console after returning.
+
 ## 0.7.2 — 2026-09-07
 
 From the first outside tester's second run.

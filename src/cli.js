@@ -35,9 +35,11 @@ Usage: eag <command> [options]
                                         values for \${NAME} references, kept in the OS secret store; with no flag the
                                         value is read from stdin (pipe) or prompted. --value lands in shell history.
   env                                   print "export NAME=..." lines for every referenced secret
+  instructions [--dry-run] [--prefer agents|claude] [--json]
+                                        sync project AGENTS.md and CLAUDE.md bidirectionally
   update [--check]                      install the latest version in place; every apply also checks once a day and
                                         updates a global install in the background (agents.json "autoUpdate": false stops it)
-  doctor [--fix]                        wiring checks: skills symlinks, @AGENTS.md, Codex trust, Pi adapter, secrets
+  doctor [--fix]                        checks skills, instruction sync, Codex trust, Pi adapter, secrets
   --version                             print the version
 
 Environment: EAG_HOME (default ~/.agents), CLAUDE_CONFIG_DIR, CODEX_HOME, PI_CODING_AGENT_DIR, EAG_PROJECT,
@@ -74,6 +76,7 @@ const COMMAND_FLAGS = {
   mcp: ['scope', 'url', 'header', 'command', 'args', 'arg', 'env', 'cwd', 'type', 'force', 'json'],
   secret: ['value', 'from-env'],
   env: [],
+  instructions: ['dry-run', 'prefer', 'json'],
   doctor: ['fix', 'json'],
   update: ['check', 'force'],
 };
@@ -83,6 +86,14 @@ const COMMAND_FLAGS = {
 // flag, its value format, and the exit codes.
 const EXIT = 'Exit codes: 0 nothing to do or done · 1 error · 2 drift (something to apply) · 3 conflict (a native edit eag refuses to overwrite)';
 const USAGE = {
+  instructions: `eag instructions [--dry-run] [--prefer agents|claude] [--json]
+  Enable or sync mirrored AGENTS.md and CLAUDE.md at the current project root.
+  Creates the missing counterpart on first use. Later edits flow in either direction.
+  Different edits on both sides stop with exit 3; --prefer explicitly selects the winning file.
+  --dry-run writes nothing and exits 2 for pending changes. Enrolled projects sync on eag apply.
+  Legacy @AGENTS.md imports become mirrors; additional Claude-only text stays outside a marked shared region.
+  Edit that region or AGENTS.md to sync shared instructions. Damaged markers and circular imports stop sync.
+  ${EXIT}`,
   setup: `eag setup [--project] [--no-projects]
   init + adopt claude + adopt codex + apply + make every project agnostic + hook install + doctor --fix, in one run.
   Safe to repeat. --project scopes it to the current repo; --no-projects leaves per-project Claude servers alone.`,
@@ -133,9 +144,9 @@ eag secret ls | rm <NAME>
   reports. Every eag apply also checks the registry at most once a day and, for a global install, updates in
   the background unless agents.json has "autoUpdate": false.`,
   doctor: `eag doctor [--fix] [--json]
-  Wiring checks: skills symlinks, @AGENTS.md, Codex trust, Pi adapter, hook trust, secrets that are set but not
+  Wiring checks: skills symlinks, instruction sync, Codex trust, Pi adapter, hook trust, secrets that are set but not
   exported, projects only Claude can see, literal credentials in the source. --fix repairs symlinks, dedupes
-  identical skill copies and prepends @AGENTS.md. Exit 1 when there is a problem, 0 otherwise.`,
+  identical skill copies and syncs AGENTS.md with CLAUDE.md bidirectionally. Exit 1 when there is a problem, 0 otherwise.`,
 };
 
 export async function main(argv) {
@@ -154,6 +165,7 @@ export async function main(argv) {
     mcp: () => import('./commands/mcp.js'),
     secret: () => import('./commands/secret.js'),
     env: () => import('./commands/env.js'),
+    instructions: () => import('./commands/instructions.js'),
     doctor: () => import('./commands/doctor.js'),
     update: () => import('./commands/update.js'),
   }[cmd];

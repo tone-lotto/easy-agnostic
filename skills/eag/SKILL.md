@@ -27,6 +27,8 @@ Run `eag <command> --help` for every flag. Exit codes everywhere:
 | make a repo's servers work in every agent | `cd repo && eag init --project && eag adopt claude --scope project && eag apply --scope project` |
 | make every repo agnostic at once | `eag adopt claude --all-projects` |
 | check the wiring (hooks, trust, secrets, skills) | `eag doctor` (`--fix` repairs what is safe to repair) |
+| share project instructions in both directions | `eag instructions --dry-run`, then `eag instructions` |
+| resolve conflicting instruction files explicitly | `eag instructions --prefer agents` or `--prefer claude` |
 
 ## Rules that keep you out of trouble
 
@@ -35,6 +37,7 @@ Run `eag <command> --help` for every flag. Exit codes everywhere:
   (`eag status --json` shows `source` and `native`), then choose: `--prefer source` overwrites the native
   edit; `--prefer native` keeps it and writes it back into the source. Do not pick blindly.
 - **`apply` is idempotent.** Running it again is a no-op. Loops and hooks may call it freely.
+- **Instruction sync is project-root only.** `eag instructions` or `doctor --fix` enrolls AGENTS.md and CLAUDE.md for bidirectional sync. Later edits to either sync on apply; status reports drift. If both differ, stop and inspect them before choosing `--prefer agents|claude`. MCP's `--prefer source|native` does not resolve instruction conflicts. Legacy `@AGENTS.md` imports become mirrored content. Additional Claude-only text stays outside marked shared-region comments; edit inside the region to share changes, and outside it for Claude-only changes. Damaged markers, circular imports, and symlinks stop sync without replacing files.
 - **Claude Code user scope gets resolved values by default** (an app-launched agent has no shell
   environment). `eag apply` says so per secret. Terminal-only users can set
   `{"claude": {"secrets": "env"}}` in `~/.agents/agents.json` to keep references.

@@ -4,6 +4,7 @@ import { hasDrift, summarize } from '../merge.js';
 import { c, exists, redactKnown } from '../util.js';
 import { listSecrets, resolveSecret } from '../secrets.js';
 import * as claude from '../adapters/claude.js';
+import { syncInstructions, instructionPaths } from '../instructions.js';
 
 // Known secret values, for redacting anything native we print or serialise.
 function secretPairs() { return listSecrets().map((n) => [n, resolveSecret(n)]); }
@@ -57,12 +58,24 @@ export async function run(_args, flags) {
   let errors = false;
   const json = flags.json ? { targets: [], warnings: [] } : null;
   // A missing source used to read as "empty", and the summary said nothing was wrong.
-  if (!exists(scopePaths('user').mcp)) {
+  const hasMcp = exists(scopePaths('user').mcp);
+  if (!hasMcp && !exists(instructionPaths(root).state)) {
     if (json) { console.log(JSON.stringify({ error: 'no source', hint: 'eag init' })); return 1; }
     console.log(`${c.bad('no source')} ${scopePaths('user').mcp} does not exist. Run: ${c.bold('eag init')} (or eag setup)`);
     return 1;
   }
-  for (const id of targetsForScope(scope, root)) {
+  try {
+    const instructions = syncInstructions(root, { dryRun: true, trackedOnly: true });
+    if (json) json.instructions = instructions;
+    else if (instructions.op !== 'skipped') console.log(`instructions: ${instructions.message}`);
+    drift ||= ['sync', 'enroll'].includes(instructions.op);
+    conflict ||= instructions.op === 'conflict';
+  } catch (e) {
+    errors = true;
+    if (json) json.instructions = { op: 'error', message: e.message };
+    else console.log(`instructions: ${e.message}`);
+  }
+  for (const id of hasMcp ? targetsForScope(scope, root) : []) {
     try {
       const plan = buildPlan(id, { root, warn: (m) => warnings.add(m) });
       if (json) json.targets.push(toJson(plan)); else printPlan(plan, { verbose: !flags.quiet });
@@ -85,14 +98,14 @@ export async function run(_args, flags) {
     console.log(JSON.stringify(json, null, 2));
     return flags['exit-code'] ? code : 0;
   }
-  if (scope !== 'user') {
+  if (hasMcp && scope !== 'user') {
     const local = Object.keys(claude.readLocal(root));
     console.log(`\n${c.bold('Claude Code · project')}`);
     console.log(`  ${c.dim('.mcp.json is the source; Claude and Pi read it as is')}`);
     if (local.length) console.log(`  ${c.dim(`local-scope entries in ~/.claude.json for this project (not managed): ${local.join(', ')}. Import with: eag adopt claude --scope project`)}`);
   }
   for (const w of warnings) console.log(`${c.warn('warn')} ${w}`);
-  if (conflict) console.log(`\n${c.bad('conflict:')} resolve with ${c.bold('eag apply --prefer source|native')}, ${c.bold('eag adopt')}, or ${c.bold('eag mcp target <name> <agent> off')}.`);
+  if (conflict) console.log(`\n${c.bad('conflict:')} for MCP use ${c.bold('eag apply --prefer source|native')}; for instructions use ${c.bold('eag instructions --prefer agents|claude')}.`);
   if (flags['exit-code']) return code;
   return 0;
 }
