@@ -10,6 +10,7 @@ import { extractSecrets } from './adopt.js';
 import { refreshInit } from '../shell.js';
 import * as codex from '../adapters/codex.js';
 import { checkThrottled, selfUpdate, installKind, VERSION } from '../update.js';
+import { installSkill } from './hook.js';
 
 // apply runs on every agent launch, which makes it the place an update can happen without
 // anyone remembering to. At most one registry call a day; a global install updates itself
@@ -152,6 +153,9 @@ export async function run(_args, flags) {
   // Keep the generated shell file in step with what is installed, so an agent added after
   // `eag hook install` gets wrapped without the user having to remember this exists.
   if (!dry) { try { refreshInit(); } catch { /* never fail an apply over the shell file */ } }
+  // Same for eag's own skill: a background update replaces the package, and the copy in
+  // ~/.agents/skills should say what the installed version does.
+  if (!dry) { try { if (exists(path.join(scopePaths('user').root, 'skills', 'eag', '.eag-managed'))) installSkill(); } catch { /* ditto */ } }
   const code = errors || failures ? 1 : conflicts ? 3 : 0;
   if (json) { json.warnings = [...warnings]; json.exit = code; process.stdout.write(`${JSON.stringify(json, null, 2)}\n`); }
   return code;

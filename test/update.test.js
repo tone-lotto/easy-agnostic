@@ -53,3 +53,12 @@ test('selfUpdate refuses a dev checkout and the npx cache', () => {
   assert.equal(r.ok, false);
   assert.match(r.reason, /checkout/);
 });
+
+// A desktop-app hook has no npm on PATH; npm ships next to node, and node is what the
+// launcher already resolved.
+test('npmBin prefers the npm next to the running node', () => {
+  const b = update.npmBin();
+  const beside = path.join(path.dirname(process.execPath), 'npm');
+  assert.equal(b, fs.existsSync(beside) ? beside : 'npm');
+  assert.ok(path.isAbsolute(b) || b === 'npm');
+});

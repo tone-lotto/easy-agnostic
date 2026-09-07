@@ -29,10 +29,26 @@ export function installKind(entry = ENTRY) {
   return 'global';
 }
 
-// Where `npm i -g` puts binaries. Resolved once, at install time, when npm is on PATH;
-// the hook launcher has no PATH to speak of.
+// npm, found the way the launcher finds node: next to the running node first, PATH second.
+// A hook started by a desktop app has PATH=/usr/bin:/bin:/usr/sbin:/sbin and no npm on it,
+// and that is exactly where the background update has to run from.
+export function npmBin() {
+  const beside = path.join(path.dirname(process.execPath), 'npm');
+  return exists(beside) ? beside : 'npm';
+}
+// How to invoke it: `npm` is itself a node script with an env shebang, so with no node on
+// PATH it must be run as `<node> <npm-cli.js>`. Returns [command, ...leadingArgs].
+export function npmArgv() {
+  const bin = npmBin();
+  if (bin === 'npm') return ['npm'];
+  let cli = bin; try { cli = fs.realpathSync(bin); } catch { /* keep */ }
+  return [process.execPath, cli];
+}
+const runNpm = (args, opts) => { const [cmd, ...pre] = npmArgv(); return execFileSync(cmd, [...pre, ...args], opts); };
+
+// Where `npm i -g` puts binaries. Resolved once, at install time.
 export function globalBinDir() {
-  try { return path.join(execFileSync('npm', ['prefix', '-g'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10000 }).trim(), 'bin'); }
+  try { return path.join(runNpm(['prefix', '-g'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10000 }).trim(), 'bin'); }
   catch { return null; }
 }
 
@@ -83,11 +99,12 @@ export function selfUpdate(version, { detached = false, fromNpx = false } = {}) 
   const args = ['i', '-g', `${PKG.name}@${version}`];
   if (detached) {
     try {
-      const p = spawn('npm', args, { detached: true, stdio: 'ignore' });
+      const [cmd, ...pre] = npmArgv();
+      const p = spawn(cmd, [...pre, ...args], { detached: true, stdio: 'ignore' });
       p.unref();
       return { ok: true, background: true };
     } catch (e) { return { ok: false, reason: e.message }; }
   }
-  try { execFileSync('npm', args, { stdio: ['ignore', 'pipe', 'pipe'], timeout: 120000 }); return { ok: true }; }
+  try { runNpm(args, { stdio: ['ignore', 'pipe', 'pipe'], timeout: 120000 }); return { ok: true }; }
   catch (e) { return { ok: false, reason: e.stderr?.toString().trim() || e.message }; }
 }

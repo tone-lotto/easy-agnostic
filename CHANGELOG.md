@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.1 — 2026-09-07
+
+- **The background update works from a desktop-app launch.** It ran `npm` by PATH, and a hook
+  started by an app has `PATH=/usr/bin:/bin:/usr/sbin:/sbin` — no npm, so for an app-only user the
+  update silently never started. npm is found next to the node the launcher already resolved and run
+  as `<node> <npm-cli.js>`, since npm is itself a node script with an env shebang.
+- `apply` also refreshes eag's own skill copy after an update, so `~/.agents/skills/eag` describes the
+  installed version.
+
 ## 0.7.0 — 2026-09-07
 
 Updates without anyone remembering to update.
