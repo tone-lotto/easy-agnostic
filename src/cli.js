@@ -7,12 +7,17 @@ const HELP = `eag — Easy Agnostic: one source, many agents (MCP sync for Claud
 
 Usage: eag <command> [options]
 
-  setup [--project]                     detect, import and sync everything in one shot: init + adopt (claude, codex)
-                                        + apply + doctor --fix. Safe to run again any time; --project scopes it to
-                                        the current repo instead of the whole machine.
+  setup [--project] [--no-projects]     detect, import and sync everything in one shot: init + adopt (claude, codex)
+                                        + apply + make every project agnostic + hook install + doctor --fix. Safe to
+                                        run again any time. --project scopes it to the current repo instead of the
+                                        whole machine; --no-projects leaves per-project Claude servers where they are.
   init [--project]                      create the source files and detect installed agents
   adopt <claude|codex> [--scope user|project] [--dry-run] [--force]
                                         import what an agent has today into the source
+  adopt claude --all-projects [--dry-run] [--keep-local]
+                                        make every project agnostic: Claude keeps per-project servers to itself in
+                                        ~/.claude.json, so this moves each one into that repo's own .mcp.json, which
+                                        Claude and Pi read natively and Codex gets through .codex/config.toml
   status [--scope user|project|all] [--exit-code] [--quiet]
                                         show drift between source, last apply and each agent
   apply [--scope user|project|all] [--target claude,codex] [--dry-run] [--prefer source|native] [--quiet]
@@ -49,16 +54,16 @@ export function parseArgs(argv) {
   }
   return { flags, positional };
 }
-const BOOL = new Set(['dry-run', 'exit-code', 'fix', 'force', 'project', 'help', 'version', 'quiet', 'from-env']);
+const BOOL = new Set(['dry-run', 'exit-code', 'fix', 'force', 'project', 'help', 'version', 'quiet', 'from-env', 'all-projects', 'keep-local', 'no-projects']);
 function push(flags, k, v) { if (flags[k] === undefined) flags[k] = v; else flags[k] = [].concat(flags[k], v); }
 
 // Unknown flags used to be parsed and then ignored, so `--dryrun` wrote for real and
 // exited 0. Every flag a command honours is listed here; anything else is an error.
 const GLOBAL_FLAGS = ['help', 'version'];
 const COMMAND_FLAGS = {
-  setup: ['project'],
+  setup: ['project', 'no-projects'],
   init: ['project'],
-  adopt: ['scope', 'dry-run', 'force'],
+  adopt: ['scope', 'dry-run', 'force', 'all-projects', 'keep-local'],
   status: ['scope', 'exit-code', 'quiet'],
   apply: ['scope', 'target', 'dry-run', 'prefer', 'quiet'],
   hook: ['dry-run'],

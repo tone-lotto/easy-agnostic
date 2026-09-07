@@ -8,7 +8,9 @@ import path from 'node:path';
 // real home. Pure modules (merge.js, util.js) have no such constraint.
 export function sandbox() {
   const dir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'eag-unit-'));
-  process.env.EAG_HOME = path.join(dir, 'agents');
+  // `.agents`, exactly as in a real home: the name matters, because project scope collides
+  // with user scope precisely when a project's `.agents/` IS EAG_HOME.
+  process.env.EAG_HOME = path.join(dir, '.agents');
   process.env.CODEX_HOME = path.join(dir, 'codex');
   process.env.CLAUDE_CONFIG_DIR = path.join(dir, 'cc');
   process.env.PI_CODING_AGENT_DIR = path.join(dir, 'pi');
@@ -16,7 +18,7 @@ export function sandbox() {
   // Never touch the real keychain from a unit test.
   process.env.EAG_SECRET_BACKEND = 'file';
   process.env.EAG_SECRET_SERVICE = 'eag-unit-test';
-  for (const d of ['agents', 'codex', 'cc', 'pi', 'proj']) fs.mkdirSync(path.join(dir, d), { recursive: true });
+  for (const d of ['.agents', 'codex', 'cc', 'pi', 'proj']) fs.mkdirSync(path.join(dir, d), { recursive: true });
   return dir;
 }
 

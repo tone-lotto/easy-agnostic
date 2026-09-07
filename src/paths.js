@@ -27,5 +27,17 @@ export function scopePaths(scope, root) {
     return { scope, root: EAG_HOME, mcp: path.join(EAG_HOME, 'mcp.json'), agents: path.join(EAG_HOME, 'agents.json'), state: path.join(EAG_HOME, '.state') };
   }
   root = root || projectRoot();
-  return { scope, root, mcp: path.join(root, '.mcp.json'), agents: path.join(root, '.agents', 'agents.json'), state: path.join(root, '.agents', '.state') };
+  const p = { scope, root, mcp: path.join(root, '.mcp.json'), agents: path.join(root, '.agents', 'agents.json'), state: path.join(root, '.agents', '.state') };
+  // A "project" whose .agents/ IS the user's EAG_HOME — normally $HOME, since EAG_HOME
+  // defaults to ~/.agents — would put the project's policy in the machine-wide agents.json
+  // and its snapshots in the user's state dir. One apply there rewrites every target's
+  // policy for the whole machine. Callers must refuse to write; readers must skip it.
+  p.collides = path.resolve(p.agents) === path.resolve(path.join(EAG_HOME, 'agents.json'));
+  return p;
+}
+
+// The message every command that would write project scope shares.
+export function assertProjectScope(paths) {
+  if (!paths.collides) return paths;
+  throw new Error(`project scope for ${paths.root} would write ${paths.agents}, which is the user-level file (EAG_HOME=${EAG_HOME}).\nRun this from a project directory, or point EAG_PROJECT at one.`);
 }

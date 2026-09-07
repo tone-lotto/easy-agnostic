@@ -1,4 +1,9 @@
-import { scopePaths, projectRoot } from '../paths.js';
+import os from 'node:os';
+import path from 'node:path';
+import { scopePaths, assertProjectScope, projectRoot } from '../paths.js';
+import { migratable } from '../projects.js';
+import { run as initRun } from './init.js';
+import { run as applyRun } from './apply.js';
 import { loadSource, saveMcp, saveAgents, validateServer } from '../source.js';
 import { loadState, saveState } from '../state.js';
 import { setSecret, resolveSecret, backendName } from '../secrets.js';
@@ -32,12 +37,14 @@ function extractSecrets(name, obj) {
 
 export async function run(args, flags) {
   const agent = args[0];
+  if (flags['all-projects']) return allProjects(agent, flags);
   if (!['claude', 'codex'].includes(agent)) throw new Error('usage: eag adopt <claude|codex> [--scope user|project] [--dry-run] [--force]');
   const scope = flags.scope || 'user';
   if (!['user', 'project'].includes(scope)) throw new Error(`--scope must be user or project (got "${scope}")`);
   const root = projectRoot();
   const dry = !!flags['dry-run'];
   const paths = scopePaths(scope, root);
+  if (scope === 'project') assertProjectScope(paths);
   const src = loadSource(paths);
   if (!src.hasMcp) throw new Error(`${paths.mcp} not found; run eag init${scope === 'project' ? ' --project' : ''} first`);
 
@@ -110,4 +117,53 @@ export async function run(args, flags) {
   }
   console.log(`\nNext: ${c.bold('eag status')}`);
   return 0;
+}
+
+// Claude's "local" scope is the one place eag's promise does not hold: those servers live in
+// ~/.claude.json and only Claude reads them, so opening Codex or Pi in that repo finds
+// nothing. This walks every project that has them and moves them into the project's own
+// .mcp.json, which Claude and Pi read natively and which eag renders into .codex/config.toml.
+//
+// It writes inside repositories the user did not name, so it says exactly what it touched,
+// skips anything it is not sure about, and never runs without being asked.
+async function allProjects(agent, flags) {
+  if (agent && agent !== 'claude') throw new Error('--all-projects applies to: eag adopt claude --all-projects');
+  const dry = !!flags['dry-run'];
+  const keepLocal = !!flags['keep-local'];
+  const items = migratable();
+  if (!items.length) { console.log('no project-scoped servers in Claude Code to migrate'); return 0; }
+
+  let moved = 0;
+  let failed = 0;
+  const before = process.env.EAG_PROJECT;
+  for (const p of items) {
+    const short = p.root.replace(os.homedir(), '~');
+    if (p.skip) { console.log(`${c.dim('skip   ')} ${short} ${c.dim(`(${p.skip})`)}`); continue; }
+    console.log(`\n${c.bold(short)} ${c.dim(p.names.join(', '))}`);
+    if (dry) { console.log(`  ${c.dim(`would write ${path.join(p.root, '.mcp.json')} and .codex/config.toml`)}`); continue; }
+    try {
+      // EAG_PROJECT is the documented way to aim project scope somewhere other than the cwd.
+      process.env.EAG_PROJECT = p.root;
+      await initRun([], { project: true });
+      await run(['claude'], { scope: 'project' });
+      await applyRun([], { scope: 'project' });
+      if (!keepLocal) {
+        // Leaving the local copy behind means Claude carries the server twice and the copy
+        // nothing syncs is the one that drifts.
+        for (const name of p.names) {
+          const err = claude.removeLocal(p.root, name);
+          if (err) { console.log(`  ${c.warn('kept   ')} ${name} in local scope: ${err}`); failed++; }
+        }
+      }
+      moved++;
+    } catch (e) {
+      console.log(`  ${c.bad('error  ')} ${e.message}`);
+      failed++;
+    } finally {
+      if (before === undefined) delete process.env.EAG_PROJECT; else process.env.EAG_PROJECT = before;
+    }
+  }
+  console.log(`\n${moved} project(s) now agnostic${failed ? `, ${c.warn(`${failed} problem(s)`)}` : ''}${dry ? c.dim(' (dry run: nothing written)') : ''}`);
+  if (moved && !dry) console.log(c.dim('Each repo got a committable .mcp.json; .codex/config.toml and .agents/.state/ went into its .gitignore.\nCodex reads a project config only in a repo you have trusted inside Codex — eag doctor says which.'));
+  return failed ? 1 : 0;
 }

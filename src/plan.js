@@ -1,4 +1,4 @@
-import { scopePaths } from './paths.js';
+import { scopePaths, assertProjectScope } from './paths.js';
 import { loadSource, targetEnabled, serverAllowed, serverOverrides, secretsMode, validateServer } from './source.js';
 import { loadState, saveState } from './state.js';
 import { planMerge } from './merge.js';
@@ -16,7 +16,10 @@ export const TARGETS = {
 export function targetsForScope(scope, root) {
   const ids = Object.keys(TARGETS).filter((id) => scope === 'all' || TARGETS[id].scope === scope);
   // project targets only make sense where a project source exists
-  return ids.filter((id) => TARGETS[id].scope === 'user' || exists(scopePaths('project', root).mcp));
+  // A colliding project root has no project scope at all: never offer a target that would
+  // write the user's own files.
+  const proj = scopePaths('project', root);
+  return ids.filter((id) => TARGETS[id].scope === 'user' || (!proj.collides && exists(proj.mcp)));
 }
 
 function mergeAgents(user, project) {
@@ -32,7 +35,7 @@ export function buildPlan(targetId, { root, prefer = null, warn = () => {} } = {
   const t = TARGETS[targetId];
   if (!t) throw new Error(`unknown target ${targetId}`);
   const user = loadSource(scopePaths('user'));
-  const proj = t.scope === 'project' ? loadSource(scopePaths('project', root)) : null;
+  const proj = t.scope === 'project' ? loadSource(assertProjectScope(scopePaths('project', root))) : null;
   // A project without its own agents.json must not reset the user's switches: loadSource
   // hands back DEFAULT_AGENTS when the file is missing, and spreading those last would
   // re-enable an agent the user turned off machine-wide.

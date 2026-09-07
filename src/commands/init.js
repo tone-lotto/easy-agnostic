@@ -1,6 +1,6 @@
 import path from 'node:path';
 import fs from 'node:fs';
-import { scopePaths, projectRoot, CODEX_HOME, PI_AGENT_DIR } from '../paths.js';
+import { scopePaths, assertProjectScope, projectRoot, CODEX_HOME, PI_AGENT_DIR } from '../paths.js';
 import { DEFAULT_AGENTS, saveAgents, saveMcp, loadSource } from '../source.js';
 import { exists, ensureDir, c } from '../util.js';
 import * as claude from '../adapters/claude.js';
@@ -8,6 +8,7 @@ import * as claude from '../adapters/claude.js';
 export async function run(_args, flags) {
   const scope = flags.project ? 'project' : 'user';
   const paths = scopePaths(scope, scope === 'project' ? projectRoot() : undefined);
+  if (scope === 'project') assertProjectScope(paths);
   const src = loadSource(paths);
   if (!src.hasMcp) { saveMcp(paths, {}, {}); console.log(`${c.ok('created')} ${paths.mcp}`); }
   else console.log(`${c.dim('exists ')} ${paths.mcp} (${Object.keys(src.servers).length} servers)`);
@@ -21,10 +22,13 @@ export async function run(_args, flags) {
       // project agents.json only overrides; leave targets to the user file
       delete agents.targets;
     }
-    saveAgents(paths, agents);
-    console.log(`${c.ok('created')} ${paths.agents}`);
+    // An overrides file with nothing in it is litter in someone's repository — and this
+    // runs in every project `adopt claude --all-projects` touches. It is created the
+    // moment there is something to put in it (an adopted override, `eag mcp target`).
+    const empty = scope === 'project' && !Object.keys(agents.servers || {}).length && Object.keys(agents).length === 1;
+    if (!empty) { saveAgents(paths, agents); console.log(`${c.ok('created')} ${paths.agents}`); }
     if (scope === 'user') console.log(`         targets: ${Object.entries(agents.targets).map(([k, v]) => `${k}=${v}`).join('  ')}`);
-  } else console.log(`${c.dim('exists ')} ${paths.agents}`);
+  } else if (src.hasAgents) console.log(`${c.dim('exists ')} ${paths.agents}`);
   ensureDir(paths.state);
   if (scope === 'project') {
     // Both can carry literal credentials: the snapshots/backups under .state, and the

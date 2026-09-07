@@ -86,6 +86,7 @@ trap cleanup EXIT
 # behind and its index in the old sandbox: remove them before wiping it.
 remove_secrets
 rm -rf "$S"; mkdir -p "$S/cc" "$S/codex" "$S/agents" "$S/pi" "$S/proj"
+mkdir -p "$S/projects"
 : > "$S/.eag-sandbox"
 : > "$S/shellrc"   # empty: doctor must report the missing `eval "$(eag env)"` line, not read yours
 # Only what eag and `claude mcp` read from ~/.claude.json: mcpServers, projects[*].mcpServers
@@ -94,9 +95,19 @@ node -e '
 const fs = require("fs"), o = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
 const out = { mcpServers: o.mcpServers || {}, projects: {} };
 for (const k of ["hasCompletedOnboarding", "lastOnboardingVersion"]) if (k in o) out[k] = o[k];
-for (const [root, p] of Object.entries(o.projects || {})) if (p.mcpServers && Object.keys(p.mcpServers).length) out.projects[root] = { mcpServers: p.mcpServers };
+// Project roots are absolute paths into real repositories on this machine, and
+// `adopt claude --all-projects` writes into whatever root it is given. Remap every one
+// into the sandbox so nothing in this run can reach a real checkout.
+const sandboxProjects = process.argv[3];
+let i = 0;
+for (const [root, p] of Object.entries(o.projects || {})) {
+  if (!p.mcpServers || !Object.keys(p.mcpServers).length) continue;
+  const dest = require("path").join(sandboxProjects, `p${i++}-${require("path").basename(root) || "root"}`);
+  fs.mkdirSync(dest, { recursive: true });
+  out.projects[dest] = { mcpServers: p.mcpServers };
+}
 fs.writeFileSync(process.argv[2], JSON.stringify(out, null, 2) + "\n");
-' "$SRC_CLAUDE" "$S/cc/.claude.json"
+' "$SRC_CLAUDE" "$S/cc/.claude.json" "$S/projects"
 cp "$SRC_CODEX" "$S/codex/config.toml"
 # A table outside the (not yet created) managed block is "locked": eag must read it for
 # comparison and never edit it, on every scope and every apply.
@@ -267,6 +278,37 @@ A mcp rm e2e-touch
 apply_s --scope user --target codex
 grep -q '\[mcp_servers.e2e-orphan\]' "$CODEX_HOME/config.toml" || { echo "FAIL: the orphan entry did not survive the second write either" >&2; exit 1; }
 
+# --- every project agnostic ------------------------------------------------------------
+# Claude keeps per-project servers to itself in ~/.claude.json, where no other agent can see
+# them. `--all-projects` moves each into that repo's own .mcp.json. The roots here were
+# remapped into the sandbox above, so this can never touch a real checkout.
+A adopt claude --all-projects --dry-run > "$S/allproj-dry.txt" 2>&1
+grep -q 'would write' "$S/allproj-dry.txt" || { echo "FAIL: --all-projects --dry-run planned nothing:" >&2; cat "$S/allproj-dry.txt" >&2; exit 1; }
+for d in "$S"/projects/*/; do
+  [ -f "$d/.mcp.json" ] && { echo "FAIL: --dry-run wrote $d/.mcp.json" >&2; exit 1; }
+done
+A adopt claude --all-projects > "$S/allproj.txt" 2>&1 || true
+migrated=0
+for d in "$S"/projects/*/; do
+  [ -d "$d" ] || continue
+  [ -f "$d/.mcp.json" ] || { echo "FAIL: $d has no .mcp.json after --all-projects" >&2; cat "$S/allproj.txt" >&2; exit 1; }
+  node -e '
+  const fs = require("fs");
+  const n = Object.keys(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).mcpServers || {}).length;
+  if (!n) { console.error(`FAIL: ${process.argv[1]} has no servers`); process.exit(1); }
+  ' "$d/.mcp.json"
+  migrated=$((migrated + 1))
+done
+[ "$migrated" -gt 0 ] || { echo "FAIL: --all-projects migrated nothing" >&2; cat "$S/allproj.txt" >&2; exit 1; }
+# and the local copies are gone, so Claude no longer carries a second, unsynced one
+node -e '
+const fs = require("fs"), d = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+const left = Object.entries(d.projects || {}).filter(([, p]) => Object.keys(p.mcpServers || {}).length);
+if (left.length) { console.error(`FAIL: local-scope entries survived in: ${left.map(([r]) => r).join(", ")}`); process.exit(1); }
+' "$S/cc/.claude.json"
+# re-running is a no-op: there is nothing left in local scope to move
+A adopt claude --all-projects 2>&1 | grep -q 'no project-scoped servers' || { echo "FAIL: a second --all-projects did not report there is nothing to do" >&2; exit 1; }
+
 # --- sync on launch: `eag hook` -------------------------------------------------------
 # The generated shell file has to be valid POSIX sh, wire the rc idempotently, and define a
 # wrapper that syncs BEFORE handing control to the real binary. A fake `codex` first on PATH
@@ -382,7 +424,7 @@ printf '[mcp_servers.setup-codex-demo]\nurl = "https://example.com/setup-codex-d
   set +e; out="$(A setup)"; rc=$?; set -e
   echo "$out"
   [ "$rc" = 0 ] || { echo "FAIL: eag setup exited $rc on a clean fixture with nothing that should fail" >&2; exit 1; }
-  for stage in '1/6 init' '2/6 adopt claude' '3/6 adopt codex' '4/6 apply' '5/6 hook install' '6/6 doctor'; do
+  for stage in '1/7 init' '2/7 adopt claude' '3/7 adopt codex' '4/7 apply' '5/7 make projects agnostic' '6/7 hook install' '7/7 doctor'; do
     echo "$out" | grep -q "$stage" || { echo "FAIL: eag setup did not run stage: $stage" >&2; exit 1; }
   done
   [ -f "$SETUP_S/agents/mcp.json" ] || { echo "FAIL: eag setup did not create the source" >&2; exit 1; }

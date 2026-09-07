@@ -9,6 +9,7 @@ import { exists, readJson, refsIn, looksLikeSecret, mapStrings, writeFileAtomic,
 import { resolveSecret, backendName } from '../secrets.js';
 import * as pi from '../adapters/pi.js';
 import * as shell from '../shell.js';
+import { migratable } from '../projects.js';
 import * as hooks from '../hooks.js';
 import * as claude from '../adapters/claude.js';
 
@@ -62,7 +63,10 @@ async function checks(fix, root, out) {
   // source
   const user = loadSource(scopePaths('user'));
   out.push(user.hasMcp ? { level: 'ok', msg: `source: ${user.paths.mcp} (${Object.keys(user.servers).length} servers)` } : { level: 'bad', msg: `source missing: ${user.paths.mcp}. Run: eag init` });
-  const proj = loadSource(scopePaths('project', root));
+  // From $HOME the "project" .agents/ is the user's own EAG_HOME; there is no project
+  // source there, and reading it as one would report the user's file twice.
+  const projPaths = scopePaths('project', root);
+  const proj = projPaths.collides ? { hasMcp: false, servers: {}, paths: projPaths } : loadSource(projPaths);
   if (proj.hasMcp) out.push({ level: 'ok', msg: `project source: ${proj.paths.mcp} (${Object.keys(proj.servers).length} servers)` });
   for (const s of [user, proj]) {
     if (!s.hasMcp) continue;
@@ -153,6 +157,14 @@ async function checks(fix, root, out) {
     try { execFileSync('codex', ['--version'], { stdio: 'ignore' }); out.push({ level: 'ok', msg: 'codex CLI runs' }); }
     catch { out.push({ level: 'warn', msg: 'codex CLI on PATH does not run (reinstall: npm install -g @openai/codex@latest); config is still written' }); }
   } else out.push({ level: 'info', msg: `codex not found at ${CODEX_HOME}` });
+
+  // Projects whose servers only Claude can see: the one gap eag cannot close by syncing,
+  // because the servers are not in any source yet.
+  for (const p of migratable()) {
+    if (p.skip) continue;
+    if (fix) continue; // --fix repairs wiring, not other people's repositories
+    out.push({ level: 'warn', msg: `${p.root}: ${p.names.join(', ')} exist only in Claude Code (local scope); Codex and Pi cannot see them. Run: eag adopt claude --all-projects` });
+  }
 
   // pi
   out.push(...pi.checks(root, { ...user.servers, ...(proj.hasMcp ? proj.servers : {}) }));

@@ -24,8 +24,17 @@ export function read() {
 
 // Entries Claude stores under projects[<root>].mcpServers ("local" scope). Informational.
 export function readLocal(root) {
-  const data = readJson(CLAUDE_JSON, {});
-  return data.projects?.[root]?.mcpServers || {};
+  return readRaw().projects?.[root]?.mcpServers || {};
+}
+// The whole file, for the one caller that needs the projects map rather than one project.
+export function readRaw() { return readJson(CLAUDE_JSON, {}); }
+
+// Drop a "local" entry once the same server lives in the project's own .mcp.json, so Claude
+// stops carrying a private second copy that nothing keeps in sync. Local scope is keyed by
+// the directory the CLI runs in, hence cwd. Failure is reported, never fatal.
+export function removeLocal(root, name) {
+  try { execFileSync('claude', ['mcp', 'remove', name, '-s', 'local'], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] }); return null; }
+  catch (e) { return e.stderr?.toString().trim() || `claude mcp remove exited ${e.status ?? e.signal ?? 'abnormally'}`; }
 }
 
 // Claude Code does expand ${VAR} — in `env` values and in HTTP headers alike, including

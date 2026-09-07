@@ -373,3 +373,30 @@ test('setSecret refuses a value that is not a non-empty string', () => {
   assert.equal(secrets.getSecret('EAG_UNIT_BAD'), undefined);
   assert.equal(secrets.listSecrets().includes('EAG_UNIT_BAD'), false, 'a refused value must not leave a name in the index');
 });
+
+// EAG_HOME defaults to ~/.agents, so from $HOME the "project" .agents/ IS the user's own
+// config dir: project scope there would put a project's policy in the machine-wide
+// agents.json and its snapshots in the user's state dir. One apply would rewrite every
+// target's policy for the whole machine.
+test('project scope that would write the user files is flagged and refused', async () => {
+  const { scopePaths, assertProjectScope, EAG_HOME } = await import('../src/paths.js');
+  const home = path.dirname(EAG_HOME);
+  const p = scopePaths('project', home);
+  assert.equal(p.collides, true);
+  assert.equal(p.agents, scopePaths('user').agents);
+  assert.throws(() => assertProjectScope(p), /would write .*agents\.json/);
+
+  const ok = scopePaths('project', path.join(home, 'some-repo'));
+  assert.equal(ok.collides, false);
+  assert.equal(assertProjectScope(ok), ok, 'a normal project passes straight through');
+});
+
+test('targetsForScope offers no project target for a colliding root', async () => {
+  const { targetsForScope } = await import('../src/plan.js');
+  const { EAG_HOME } = await import('../src/paths.js');
+  const home = path.dirname(EAG_HOME);
+  write(path.join(home, '.mcp.json'), JSON.stringify({ mcpServers: {} }));
+  try {
+    assert.deepEqual(targetsForScope('project', home), [], 'even with a .mcp.json present');
+  } finally { fs.rmSync(path.join(home, '.mcp.json'), { force: true }); }
+});
