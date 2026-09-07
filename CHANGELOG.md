@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.0 — 2026-09-07
+
+- **Skills flow both ways.** `eag adopt skills` moves a skill that only one agent has — under
+  `~/.claude/skills` or `~/.codex/skills` — into `~/.agents/skills`, which Codex reads directly and
+  `doctor --fix` links into Claude Code. Claude is left a link so nothing it had disappears; Codex gets
+  nothing left behind because a copy would make it list the skill twice. Two *different* skills sharing
+  a name are reported and left exactly where they are (exit 2); eag never picks. `eag setup` runs it as
+  step 5/8, and `doctor` names any skill still kept by one agent alone.
+
 ## 0.5.0 — 2026-09-07
 
 Agent-operability release. Four agents that had never seen the project were each given a real task

@@ -2,6 +2,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { scopePaths, assertProjectScope, projectRoot } from '../paths.js';
 import { migratable } from '../projects.js';
+import * as skills from '../skills.js';
 import { run as initRun } from './init.js';
 import { run as applyRun } from './apply.js';
 import { loadSource, saveMcp, saveAgents, validateServer } from '../source.js';
@@ -38,6 +39,7 @@ export function extractSecrets(name, obj) {
 export async function run(args, flags) {
   const agent = args[0];
   if (flags['all-projects']) return allProjects(agent, flags);
+  if (agent === 'skills') return adoptSkills(flags);
   if (!['claude', 'codex'].includes(agent)) throw new Error('usage: eag adopt <claude|codex> [--scope user|project] [--dry-run] [--force]');
   const scope = flags.scope || 'user';
   if (!['user', 'project'].includes(scope)) throw new Error(`--scope must be user or project (got "${scope}")`);
@@ -166,4 +168,25 @@ async function allProjects(agent, flags) {
   console.log(`\n${moved} project(s) now agnostic${failed ? `, ${c.warn(`${failed} problem(s)`)}` : ''}${dry ? c.dim(' (dry run: nothing written)') : ''}`);
   if (moved && !dry) console.log(c.dim('Each repo got a committable .mcp.json; .codex/config.toml and .agents/.state/ went into its .gitignore.\nCodex reads a project config only in a repo you have trusted inside Codex — eag doctor says which.'));
   return failed ? 1 : 0;
+}
+
+// Skills only flow outward from ~/.agents/skills. A skill that lives only in ~/.claude/skills
+// or ~/.codex/skills stays that agent's alone until it is moved here; then Codex reads it
+// directly and Claude keeps a link. Two different skills with one name are never merged.
+async function adoptSkills(flags) {
+  const dry = !!flags['dry-run'];
+  const items = skills.plan();
+  if (!items.length) { console.log('every skill is already shared; nothing to adopt'); return 0; }
+  const short = (p) => p.replace(os.homedir(), '~');
+  for (const it of items) {
+    if (it.op === 'adopt') console.log(`${c.ok('adopt  ')} ${it.name} ${c.dim(`${short(it.from)} → ${short(skills.SHARED)}${it.agent === 'claude' ? ' (link left behind)' : ''}`)}`);
+    else if (it.op === 'duplicate') console.log(`${c.dim('same   ')} ${it.name} ${c.dim(`${short(it.from)} is identical to ${short(it.against)}; dropping the copy`)}`);
+    else console.log(`${c.warn('clash  ')} ${it.name}: ${short(it.from)} is a DIFFERENT skill from ${short(it.against)}. Rename one; eag will not choose`);
+  }
+  if (dry) { console.log(`\n${c.dim('dry run: nothing moved')}`); return 0; }
+  const done = skills.apply(items);
+  const clashes = items.filter((i) => i.op === 'collision').length;
+  console.log(`\n${done.filter((d) => d.op === 'adopt').length} skill(s) now shared, ${done.filter((d) => d.op === 'duplicate').length} duplicate(s) dropped${clashes ? `, ${c.warn(`${clashes} name clash(es) left alone`)}` : ''}`);
+  if (done.length) console.log(c.dim('Codex reads ~/.agents/skills directly; run eag doctor --fix to link them into Claude Code.'));
+  return clashes ? 2 : 0;
 }

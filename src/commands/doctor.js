@@ -10,6 +10,7 @@ import { resolveSecret, backendName } from '../secrets.js';
 import * as pi from '../adapters/pi.js';
 import * as shell from '../shell.js';
 import { migratable } from '../projects.js';
+import * as skillsMod from '../skills.js';
 import * as hooks from '../hooks.js';
 import * as claude from '../adapters/claude.js';
 
@@ -190,6 +191,12 @@ async function checks(fix, root, out) {
     try { execFileSync('codex', ['--version'], { stdio: 'ignore' }); out.push({ level: 'ok', msg: 'codex CLI runs' }); }
     catch { out.push({ level: 'warn', msg: 'codex CLI on PATH does not run (reinstall: npm install -g @openai/codex@latest); config is still written' }); }
   } else out.push({ level: 'info', msg: `codex not found at ${CODEX_HOME}` });
+
+  // Skills one agent keeps to itself. Codex reads ~/.agents/skills, Claude gets links from
+  // it; a skill that never got there is invisible to the other agent.
+  const agentOnly = skillsMod.plan().filter((i) => i.op === 'adopt');
+  if (agentOnly.length) out.push({ level: 'warn', msg: `${agentOnly.length} skill(s) only one agent has: ${agentOnly.map((i) => `${i.name} (${i.agent})`).join(', ')}. Run: eag adopt skills` });
+  for (const i of skillsMod.plan().filter((x) => x.op === 'collision')) out.push({ level: 'warn', msg: `skill ${i.name}: ${i.from} is a DIFFERENT skill from ${i.against}; each agent sees its own. Rename one` });
 
   // Projects whose servers only Claude can see: the one gap eag cannot close by syncing,
   // because the servers are not in any source yet.

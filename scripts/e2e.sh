@@ -341,6 +341,25 @@ if (left.length) { console.error(`FAIL: local-scope entries survived in: ${left.
 # re-running is a no-op: there is nothing left in local scope to move
 A adopt claude --all-projects 2>&1 | grep -q 'no project-scoped servers' || { echo "FAIL: a second --all-projects did not report there is nothing to do" >&2; exit 1; }
 
+# --- skills flow both ways -------------------------------------------------------------
+# A skill that lives only in one agent's directory never reaches the other. `adopt skills`
+# moves it into the shared dir: Codex reads that itself, Claude keeps a link. Two different
+# skills with one name are reported and left alone.
+mkdir -p "$CLAUDE_CONFIG_DIR/skills/e2e-claude-only" "$CODEX_HOME/skills/e2e-codex-only" "$CLAUDE_CONFIG_DIR/skills/e2e-clash" "$CODEX_HOME/skills/e2e-clash"
+printf -- '---\nname: e2e-claude-only\n---\nx\n' > "$CLAUDE_CONFIG_DIR/skills/e2e-claude-only/SKILL.md"
+printf -- '---\nname: e2e-codex-only\n---\nx\n' > "$CODEX_HOME/skills/e2e-codex-only/SKILL.md"
+printf -- '---\nname: e2e-clash\n---\nCLAUDE\n' > "$CLAUDE_CONFIG_DIR/skills/e2e-clash/SKILL.md"
+printf -- '---\nname: e2e-clash\n---\nCODEX\n' > "$CODEX_HOME/skills/e2e-clash/SKILL.md"
+set +e; A adopt skills > "$S/adopt-skills.txt" 2>&1; rc=$?; set -e
+[ "$rc" = 2 ] || { echo "FAIL: adopt skills with a name clash should exit 2, got $rc" >&2; cat "$S/adopt-skills.txt" >&2; exit 1; }
+[ -f "$EAG_HOME/skills/e2e-claude-only/SKILL.md" ] || { echo "FAIL: the Claude-only skill was not moved into the shared dir" >&2; exit 1; }
+[ -L "$CLAUDE_CONFIG_DIR/skills/e2e-claude-only" ] || { echo "FAIL: Claude was not left a link to the moved skill" >&2; exit 1; }
+[ -f "$EAG_HOME/skills/e2e-codex-only/SKILL.md" ] || { echo "FAIL: the Codex-only skill was not moved into the shared dir" >&2; exit 1; }
+[ -e "$CODEX_HOME/skills/e2e-codex-only" ] && { echo "FAIL: a copy was left under Codex, which would list the skill twice" >&2; exit 1; }
+grep -q 'clash  *e2e-clash' "$S/adopt-skills.txt" || { echo "FAIL: the name clash was not reported:" >&2; cat "$S/adopt-skills.txt" >&2; exit 1; }
+grep -q CODEX "$CODEX_HOME/skills/e2e-clash/SKILL.md" || { echo "FAIL: the clashing Codex skill was touched" >&2; exit 1; }
+rm -rf "$CLAUDE_CONFIG_DIR/skills/e2e-clash" "$CODEX_HOME/skills/e2e-clash" "$EAG_HOME/skills/e2e-clash"
+
 # --- sync on launch: `eag hook` -------------------------------------------------------
 # The generated shell file has to be valid POSIX sh, wire the rc idempotently, and define a
 # wrapper that syncs BEFORE handing control to the real binary. A fake `codex` first on PATH
@@ -458,7 +477,7 @@ printf '[mcp_servers.setup-codex-demo]\nurl = "https://example.com/setup-codex-d
   set +e; out="$(A setup)"; rc=$?; set -e
   echo "$out"
   [ "$rc" = 0 ] || { echo "FAIL: eag setup exited $rc on a clean fixture with nothing that should fail" >&2; exit 1; }
-  for stage in '1/7 init' '2/7 adopt claude' '3/7 adopt codex' '4/7 apply' '5/7 make projects agnostic' '6/7 hook install' '7/7 doctor'; do
+  for stage in '1/8 init' '2/8 adopt claude' '3/8 adopt codex' '4/8 apply' '5/8 adopt skills' '6/8 make projects agnostic' '7/8 hook install' '8/8 doctor'; do
     echo "$out" | grep -q "$stage" || { echo "FAIL: eag setup did not run stage: $stage" >&2; exit 1; }
   done
   [ -f "$SETUP_S/agents/mcp.json" ] || { echo "FAIL: eag setup did not create the source" >&2; exit 1; }

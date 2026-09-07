@@ -33,6 +33,7 @@ src/source.js           load/save mcp.json + agents.json, validation, per-server
 src/secrets.js          keychain (macOS `security`), secret-tool (Linux), .secrets.env fallback
 src/state.js            last-apply snapshot per target (.state/<target>.json)
 src/projects.js         Claude's per-project "local" servers: discovery and skip reasons for adopt --all-projects
+src/skills.js           skills that only one agent has: plan (adopt/duplicate/collision) and the move into ~/.agents/skills
 src/shell.js            generated ~/.agents/shell-init.sh + rc wiring (terminal launches)
 src/hooks.js            ~/.agents/bin/eag-sync launcher + the agents' own session hooks (app/IDE launches)
 src/merge.js            the 3-way merge; pure function, no I/O
@@ -40,7 +41,7 @@ src/plan.js             builds a plan per target, applies it; TARGETS registry
 src/adapters/codex.js   read/render/write managed block in config.toml; toSource for adopt
 src/adapters/claude.js  read ~/.claude.json, write via `claude mcp add-json|remove`
 src/adapters/pi.js      read-only checks (pi-mcp-adapter reads the source directly)
-src/commands/*.js       setup (init+adopt+apply+hook+doctor --fix in one), init, adopt, status, apply, hook, mcp, secret, env, doctor
+src/commands/*.js       setup (init+adopt+apply+adopt skills+all-projects+hook+doctor --fix), init, adopt, status, apply, hook, mcp, secret, env, doctor
 scripts/e2e.sh          sandbox end-to-end run from copies of the real configs
 skills/eag/SKILL.md     eag's own skill, linked into ~/.agents/skills by `hook install` so agents can drive it
 test/*.test.js          unit tests (node --test); test/helpers.js holds the sandbox harness

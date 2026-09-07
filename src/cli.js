@@ -8,12 +8,14 @@ const HELP = `eag — Easy Agnostic: one source, many agents (MCP sync for Claud
 Usage: eag <command> [options]
 
   setup [--project] [--no-projects]     detect, import and sync everything in one shot: init + adopt (claude, codex)
-                                        + apply + make every project agnostic + hook install + doctor --fix. Safe to
+                                        + apply + adopt skills + make every project agnostic + hook install + doctor
+                                        --fix. Safe to
                                         run again any time. --project scopes it to the current repo instead of the
                                         whole machine; --no-projects leaves per-project Claude servers where they are.
   init [--project]                      create the source files and detect installed agents
   adopt <claude|codex> [--scope user|project] [--dry-run] [--force]
                                         import what an agent has today into the source
+  adopt skills [--dry-run]              move skills only one agent has into ~/.agents/skills, where every agent reads them
   adopt claude --all-projects [--dry-run] [--keep-local]
                                         make every project agnostic: Claude keeps per-project servers to itself in
                                         ~/.claude.json, so this moves each one into that repo's own .mcp.json, which
@@ -85,10 +87,14 @@ const USAGE = {
   Create the source files (~/.agents/mcp.json + agents.json, or ./.mcp.json) and detect installed agents.`,
   adopt: `eag adopt <claude|codex> [--scope user|project] [--dry-run] [--force]
 eag adopt claude --all-projects [--dry-run] [--keep-local]
+eag adopt skills [--dry-run]
   Import what an agent has today into the source. Literal credentials are moved to the secret store and
   replaced with \${NAME}. An entry already in the source with different content is kept (--force replaces it).
   --all-projects moves every per-project Claude server into that repo's own .mcp.json so Codex and Pi see it
-  too; --keep-local leaves the original copy in ~/.claude.json.`,
+  too; --keep-local leaves the original copy in ~/.claude.json.
+  'adopt skills' moves a skill that only one agent has (~/.claude/skills, ~/.codex/skills) into ~/.agents/skills,
+  which Codex reads directly and doctor links into Claude Code. Two different skills sharing a name are
+  reported and left alone (exit 2).`,
   status: `eag status [--scope user|project|all] [--exit-code] [--quiet] [--json]
   Drift between the source, the last apply and each agent. --quiet hides in-sync and foreign entries.
   --exit-code makes the exit status meaningful for scripts. --json prints one object per target.
