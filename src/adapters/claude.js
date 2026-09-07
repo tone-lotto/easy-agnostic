@@ -28,12 +28,15 @@ export function readLocal(root) {
   return data.projects?.[root]?.mcpServers || {};
 }
 
-// Claude Code expands ${VAR} from its own environment, in `env` values and in HTTP headers
-// alike, including mid-string ("Bearer ${TOK}") — verified against claude 2.1.x by starting
-// a probe server through `claude mcp list`. So the default is to pass the reference through
-// and keep the credential out of ~/.claude.json entirely. `literal` stays available for an
-// agent build where that turns out not to hold.
-export function render(name, src, { secrets = 'env' } = {}) {
+// Claude Code does expand ${VAR} — in `env` values and in HTTP headers alike, including
+// mid-string ("Bearer ${TOK}"); verified against claude 2.1.x by starting a probe server
+// through `claude mcp list`. But it expands from THE AGENT'S OWN ENVIRONMENT, and an agent
+// launched from a desktop app or an IDE on macOS inherits the launchd environment, not the
+// user's shell rc: there the reference resolves to nothing and the server cannot
+// authenticate. So `literal` is the default because it works from every launch context, and
+// `env` is the opt-in for someone who only ever starts their agents from a terminal
+// (agents.json: {"claude": {"secrets": "env"}}).
+export function render(name, src, { secrets = 'literal' } = {}) {
   if (secrets === 'env') {
     // A reference to a value that exists nowhere would hand the agent a server that can
     // never authenticate. Fail here, exactly as literal mode does.

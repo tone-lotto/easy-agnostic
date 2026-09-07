@@ -28,8 +28,6 @@ fs.chmodSync(path.join(stubDir, 'claude'), 0o755);
 process.env.PATH = `${stubDir}${path.delimiter}${process.env.PATH}`;
 
 const SRC = { url: 'https://mcp.example/sse', headers: { Authorization: 'Bearer ${EAG_UNIT_TOKEN}' } };
-// `literal` has to be asked for now: the default is `env`, because Claude Code expands
-// ${VAR} itself (verified against claude 2.1.x, in `env` values and in HTTP headers alike).
 const RENDERED = claude.render('acme', SRC, { secrets: 'literal' }); // carries TOKEN
 
 test('canonical fills in the type Claude requires from the presence of url', () => {
@@ -59,10 +57,13 @@ test('render in literal mode resolves ${NAME} into the value', () => {
   });
 });
 
-test('render defaults to env mode, so no credential is written into ~/.claude.json', () => {
+// The default has to work from every launch context. Claude Code really does expand
+// ${VAR}, but only from its own environment — an agent started from a desktop app or an
+// IDE on macOS gets the launchd environment, where a shell export does not exist, and the
+// server would fail to authenticate. `env` is the opt-in for terminal-only users.
+test('render defaults to literal, which is the only mode a GUI-launched agent can use', () => {
   const out = claude.render('acme', SRC);
-  assert.deepEqual(out, { headers: { Authorization: 'Bearer ${EAG_UNIT_TOKEN}' }, type: 'http', url: 'https://mcp.example/sse' });
-  assert.equal(JSON.stringify(out).includes(TOKEN), false, 'the default must not resolve the secret');
+  assert.deepEqual(out, { headers: { Authorization: `Bearer ${TOKEN}` }, type: 'http', url: 'https://mcp.example/sse' });
 });
 
 // A reference whose value exists nowhere would hand Claude a server that can never
