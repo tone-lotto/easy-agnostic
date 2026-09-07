@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EAG_HOME, CLAUDE_CONFIG_DIR } from './paths.js';
-import { exists, readJson, writeFileAtomic, backup } from './util.js';
+import { exists, readJson, writeFileAtomic, backup, deepEqual } from './util.js';
 
 // The shell wrapper only covers terminal launches. An agent started from a desktop app or
 // an IDE extension reads no rc, so the agent's own session hook is the only way in — and it
@@ -52,7 +52,15 @@ export const CLAUDE_SETTINGS = path.join(CLAUDE_CONFIG_DIR, 'settings.json');
 const claudeCommand = () => `/bin/sh ${LAUNCHER}`;
 const isOurs = (h) => typeof h?.command === 'string' && h.command.includes(LAUNCHER);
 
-export function claudeEntry() { return { type: 'command', command: claudeCommand(), timeout: 30 }; }
+// `timeout` is not optional: a SessionStart command hook with no timeout blocks session
+// startup for as long as it runs (measured: a 75s hook held startup for 75s, uncapped). An
+// apply takes ~150ms, so 20s is generous and still bounded. `async` is a bonus on builds
+// that honour it; the timeout is the guarantee.
+//
+// The launcher already redirects its own output, which matters more than it looks: for
+// SessionStart, "exit code 0 - stdout shown to Claude" — anything printed would be injected
+// into the session as context.
+export function claudeEntry() { return { type: 'command', command: claudeCommand(), timeout: 20, async: true }; }
 
 export function claudeState() {
   const s = readJson(CLAUDE_SETTINGS, null);
@@ -62,7 +70,9 @@ export function claudeState() {
     file: CLAUDE_SETTINGS,
     exists: s !== null,
     installed: found.length > 0,
-    current: found.length === 1 && found[0].command === claudeCommand(),
+    // The whole entry, not just the command: a change to `timeout` matters as much as a
+    // change to the path, and comparing only the command left an old entry in place.
+    current: found.length === 1 && deepEqual(found[0], claudeEntry()),
     settings: s,
   };
 }

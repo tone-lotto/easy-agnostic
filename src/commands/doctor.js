@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { parse } from 'smol-toml';
 import { scopePaths, projectRoot, EAG_HOME, CLAUDE_CONFIG_DIR, CODEX_HOME } from '../paths.js';
 import { loadSource } from '../source.js';
-import { exists, refsIn, looksLikeSecret, mapStrings, writeFileAtomic, backup, c } from '../util.js';
+import { exists, readJson, refsIn, looksLikeSecret, mapStrings, writeFileAtomic, backup, c } from '../util.js';
 import { resolveSecret, backendName } from '../secrets.js';
 import * as pi from '../adapters/pi.js';
 import * as shell from '../shell.js';
@@ -102,6 +102,15 @@ async function checks(fix, root, out) {
   if (cl.current && launcherOk) out.push({ level: 'ok', msg: 'app/IDE launches: Claude Code SessionStart hook installed' });
   else if (cl.installed && !launcherOk) out.push({ level: 'bad', msg: `Claude Code runs a SessionStart hook pointing at ${hooks.LAUNCHER}, which is missing or stale. Run: eag hook install` });
   else if (claude.available()) out.push({ level: 'warn', msg: 'app/IDE launches do not sync: no Claude Code SessionStart hook. Run: eag hook install' });
+  // Switches that silently turn every hook off. Worth naming, because the symptom is
+  // "sync-on-launch stopped working" with nothing else to see.
+  if (cl.installed && cl.settings?.disableAllHooks) {
+    out.push({ level: 'bad', msg: `"disableAllHooks" is set in ${cl.file}: the SessionStart hook is installed but will never run` });
+  }
+  const managed = readJson(path.join(CLAUDE_CONFIG_DIR, 'managed-settings.json'), null);
+  if (cl.installed && (managed?.allowManagedHooksOnly || managed?.strictPluginOnlyCustomization)) {
+    out.push({ level: 'warn', msg: `managed settings restrict hooks (${managed.allowManagedHooksOnly ? 'allowManagedHooksOnly' : 'strictPluginOnlyCustomization'}); the SessionStart hook may not run` });
+  }
   if (notExported.length) out.push({ level: 'warn', msg: `${notExported.join(', ')} resolve from the ${backendName()} store but are not exported in this shell; the agents expand \${NAME} from their own environment, so run  eval "$(eag env)"  and restart them` });
 
   // claude

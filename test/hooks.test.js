@@ -67,6 +67,16 @@ test('installClaude adds one SessionStart entry and touches nothing else', () =>
   assert.equal('matcher' in s.hooks.SessionStart[0], false, 'no matcher: it has to fire on every start');
 });
 
+// A SessionStart command hook with no timeout blocks session startup for as long as it runs
+// — measured at 75s, uncapped. And for SessionStart, "exit code 0 - stdout shown to Claude":
+// anything the command prints is injected into the session as context.
+test('the entry is bounded and silent by construction', () => {
+  const e = hooks.claudeEntry();
+  assert.equal(typeof e.timeout, 'number');
+  assert.ok(e.timeout > 0 && e.timeout <= 30, `timeout must be set and sane, got ${e.timeout}`);
+  assert.match(hooks.renderLauncher(), />\/dev\/null 2>&1/, 'the launcher must swallow its own output');
+});
+
 test('installClaude creates the file when there is none', () => {
   reset();
   const r = hooks.installClaude();
@@ -108,6 +118,19 @@ test('uninstallClaude drops the hooks key entirely when it was only ours', () =>
   hooks.uninstallClaude();
   assert.deepEqual(settings(), { model: 'opus' }, 'an empty hooks object is litter');
   assert.equal(hooks.uninstallClaude().changed, false, 'a second removal is a no-op');
+});
+
+// Comparing only the command left an entry with a stale `timeout` in place — and the
+// timeout is what stops a hung sync from blocking session startup.
+test('an entry that differs only in timeout counts as out of date', () => {
+  reset();
+  hooks.installClaude();
+  const s = settings();
+  s.hooks.SessionStart[0].hooks[0].timeout = 999;
+  writeSettings(s);
+  assert.equal(hooks.claudeState().current, false);
+  assert.equal(hooks.installClaude().changed, true);
+  assert.deepEqual(settings().hooks.SessionStart[0].hooks[0], hooks.claudeEntry());
 });
 
 test('claudeState reports installed and current separately', () => {

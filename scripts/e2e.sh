@@ -329,6 +329,20 @@ out="$(env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME="$HOME" \
 grep -q '\[mcp_servers.e2e-gui\]' "$CODEX_HOME/config.toml" || { echo "FAIL: the launcher did not sync with a minimal environment" >&2; exit 1; }
 A mcp rm e2e-gui >/dev/null; apply_s --scope user --target codex >/dev/null
 
+# The real thing: let Claude Code start a session and run its own hook chain. `--init-only`
+# is undocumented ("Run Setup and SessionStart:startup hooks, then exit") and makes no API
+# call, so this proves the app/IDE path end to end for free. Skipped, not failed, if a
+# future Claude drops the flag.
+if claude --init-only </dev/null >/dev/null 2>&1; then
+  A mcp add e2e-sessionstart --url https://example.com/sessionstart >/dev/null
+  (cd "$S/proj" && claude --init-only </dev/null >/dev/null 2>&1) || true
+  grep -q '\[mcp_servers.e2e-sessionstart\]' "$CODEX_HOME/config.toml" \
+    || { echo "FAIL: Claude Code's SessionStart hook did not sync on a real session start" >&2; exit 1; }
+  A mcp rm e2e-sessionstart >/dev/null; apply_s --scope user --target codex >/dev/null
+else
+  echo "note: claude --init-only unavailable; skipped the live SessionStart assertion" >&2
+fi
+
 A hook uninstall >/dev/null
 grep -q 'easy-agnostic' "$S/shellrc" && { echo "FAIL: hook uninstall left its block in $S/shellrc" >&2; exit 1; }
 [ -f "$EAG_HOME/shell-init.sh" ] && { echo "FAIL: hook uninstall left the generated file behind" >&2; exit 1; }
