@@ -48,43 +48,74 @@ Status: v0 spike. Targets: Claude Code (user scope via `claude mcp`, project sco
 `targets` turns a whole agent on or off. Under `servers`, `targets` is the per-server exception (`eag mcp target linear codex off` writes it), and a key named after an agent carries options only that agent understands. Note that `targets` governs what eag *writes*: Pi reads `mcp.json` itself, so a server in the source reaches Pi whichever way those switches are set.
 
 
-## Install
+## Setup
+
+The fastest way is to hand it to the coding agent you already have open — Claude Code, Codex, Pi — and let it do the work. Paste this:
+
+> Install and set up **easy-agnostic** (the `eag` CLI) so my MCP servers and skills stay in sync across Claude Code, Codex and Pi. Run `npx easy-agnostic setup` (not `npx eag`, that is a different package), then `eag doctor`, and show me what it reports. It will leave two things for me to do by hand — open a new terminal, and approve a hook in Codex (`/hooks` in the terminal, or Settings → Hooks in the ChatGPT app) — tell me when to do them. Do not use sudo; if `npm i -g` fails, stop and tell me.
+
+Or run it yourself:
 
 ```bash
-npm i -g easy-agnostic        # puts `eag` on PATH
-npx easy-agnostic setup       # or run without installing (not `npx eag`: that is an unrelated package)
+npx easy-agnostic setup
 ```
 
-Node 20 or newer. macOS and Linux.
+Node 20 or newer, macOS or Linux. One run per machine; safe to run again any time — nothing it does can overwrite a hand edit.
 
-## Quick start
+### What `setup` does
+
+| step | what happens |
+|---|---|
+| `0/8 install` | installs `eag` globally so the launch hooks have a stable path (an npx run lives in an evictable cache) |
+| `1/8 init` | creates `~/.agents/mcp.json` and `agents.json`, detects which agents are installed |
+| `2/8 adopt claude` | imports the servers Claude Code already has; credentials go to the OS keychain and become `${NAME}` |
+| `3/8 adopt codex` | same for Codex; a table another tool owns, or a ChatGPT app internal, stays Codex's and is not shared |
+| `4/8 apply` | writes the source into each agent through a 3-way merge |
+| `5/8 adopt skills` | a skill only one agent has moves to `~/.agents/skills`, where every agent reads it |
+| `6/8 make projects agnostic` | per-repo servers Claude kept to itself become that repo's own `.mcp.json` |
+| `7/8 hook install` | sync on launch: a shell wrapper for terminal launches, a `SessionStart` hook for app/IDE launches, and eag's own skill so agents know how to drive it |
+| `8/8 doctor --fix` | wiring checks; repairs symlinks and identical skill copies |
+
+It prints every file it touches. The whole thing takes about ten seconds.
+
+### The two things it cannot do for you
+
+1. **Open a new terminal.** A shell that was already open does not re-read its rc, so the secrets are not exported in it yet. `doctor` says so until you do.
+2. **Approve the Codex hook, once.** Codex will not run a hook it has not been told to trust, and says nothing when it skips one — so eag keeps telling you. Open Codex and run `/hooks` (terminal) or go to Settings → Hooks (ChatGPT app), and approve. Each repo that gets a `.codex/config.toml` also needs to be trusted inside Codex once; `eag doctor` in the repo says which.
+
+After that there is nothing to remember: every agent launch syncs, and every launch checks for a newer eag at most once a day and installs it in the background.
+
+### Check it worked
 
 ```bash
-eag setup                     # detects Claude Code, Codex and Pi; imports what each already has;
-                              # syncs it everywhere; wires your shell so it stays that way
+eag doctor          # "no problems" is the goal; every warning names the command that fixes it
+eag status          # what differs between the source and each agent (nothing, right after setup)
+eag mcp ls          # every server, with the agents it is switched off for
 ```
 
-That's it for the common case, and it is safe to run again any time — nothing it does can overwrite a hand edit (see "How it works" below). `eag setup` is `init` + `adopt claude` + `adopt codex` + `apply` + `adopt skills` + `adopt claude --all-projects` + `hook install` + `doctor --fix` in one command; run once per machine.
-
-Per project, to also sync `.mcp.json` into a per-repo Codex config:
+### Per project
 
 ```bash
 cd my-repo
-eag setup --project           # same, scoped to this repo's .mcp.json instead of the whole machine
+eag setup --project           # this repo's .mcp.json → every agent, in this repo only
 ```
 
 The generated `.codex/config.toml` holds only this repo's own servers (Codex merges them with your user config) and can contain literal values where Codex has no env-var field, so keep it out of git: `eag init --project` appends `.agents/.state/` and `.codex/config.toml` to an existing `.gitignore` (in a fresh repo, create the file with both lines).
 
-The individual steps behind `setup` are still there when you want more control — say no to one agent, preview before writing, or just check what drifted:
+### The steps, one at a time
+
+For more control — say no to one agent, preview before writing, or just check what drifted:
 
 ```bash
 eag init                      # ~/.agents/mcp.json, agents.json, detects agents
 eag adopt claude              # import what Claude Code has today (secrets -> secret store)
 eag adopt codex               # same for Codex; entries owned by another tool stay theirs
+eag adopt skills              # move skills only one agent has into ~/.agents/skills
+eag adopt claude --all-projects   # per-repo Claude servers -> each repo's own .mcp.json
 eag status                    # drift per agent
 eag apply --dry-run           # preview, then without --dry-run to write (user scope)
-eag hook install              # sync on launch (see below); safe to re-run, undo with eag hook uninstall
-eag doctor --fix              # checks skills symlinks, @AGENTS.md, Codex trust, Pi adapter, secrets; --fix repairs the first two
+eag hook install              # sync on launch; safe to re-run, undo with eag hook uninstall
+eag doctor --fix              # checks skills symlinks, @AGENTS.md, Codex trust, Pi adapter, secrets; --fix repairs what is safe
 ```
 
 ## For agents
