@@ -99,6 +99,7 @@ async function checks(fix, root, out) {
   // rc, so only its own session hook reaches it.
   const cl = hooks.claudeState();
   const launcherOk = exists(hooks.LAUNCHER) && fs.readFileSync(hooks.LAUNCHER, 'utf8') === hooks.renderLauncher();
+  const cx = hooks.codexState();
   if (cl.current && launcherOk) out.push({ level: 'ok', msg: 'app/IDE launches: Claude Code SessionStart hook installed' });
   else if (cl.installed && !launcherOk) out.push({ level: 'bad', msg: `Claude Code runs a SessionStart hook pointing at ${hooks.LAUNCHER}, which is missing or stale. Run: eag hook install` });
   else if (claude.available()) out.push({ level: 'warn', msg: 'app/IDE launches do not sync: no Claude Code SessionStart hook. Run: eag hook install' });
@@ -106,6 +107,16 @@ async function checks(fix, root, out) {
   // "sync-on-launch stopped working" with nothing else to see.
   if (cl.installed && cl.settings?.disableAllHooks) {
     out.push({ level: 'bad', msg: `"disableAllHooks" is set in ${cl.file}: the SessionStart hook is installed but will never run` });
+  }
+  if (cx.current && launcherOk) {
+    // Codex skips an untrusted hook in total silence, so an unapproved one is a problem the
+    // user would otherwise only discover by noticing nothing ever syncs.
+    const t = await hooks.codexTrust();
+    if (!t) out.push({ level: 'info', msg: 'app launches: Codex SessionStart hook installed; trust state unknown (could not ask codex app-server)' });
+    else if (t.status === 'trusted' && t.enabled !== false) out.push({ level: 'ok', msg: 'app launches: Codex SessionStart hook installed and approved' });
+    else out.push({ level: 'warn', msg: `Codex will not run its SessionStart hook: trust is "${t.status}"${t.enabled === false ? ' and it is disabled' : ''}. Open Codex, run /hooks and approve it` });
+  } else if (exists(path.join(CODEX_HOME, 'config.toml')) && !cx.installed) {
+    out.push({ level: 'warn', msg: 'app launches do not sync: no Codex SessionStart hook. Run: eag hook install' });
   }
   const managed = readJson(path.join(CLAUDE_CONFIG_DIR, 'managed-settings.json'), null);
   if (cl.installed && (managed?.allowManagedHooksOnly || managed?.strictPluginOnlyCustomization)) {

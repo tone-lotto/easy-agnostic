@@ -310,6 +310,17 @@ printf '#!/bin/sh\nprintf "REAL codex ran\\n"\n' > "$SHELLTEST/bin/codex"; chmod
 printf '{\n  "model": "opus",\n  "hooks": { "Stop": [ { "hooks": [ { "type": "command", "command": "echo theirs" } ] } ] }\n}\n' > "$CLAUDE_CONFIG_DIR/settings.json"
 A hook install >/dev/null
 [ -x "$EAG_HOME/bin/eag-sync" ] || { echo "FAIL: hook install did not create an executable launcher" >&2; exit 1; }
+# Codex takes its user hooks from $CODEX_HOME/hooks.json, discovered with no pointer in
+# config.toml — which eag must not touch for this, since that file is its managed-block target.
+cp "$CODEX_HOME/config.toml" "$S/config.before-hook.toml"
+[ -f "$CODEX_HOME/hooks.json" ] || { echo "FAIL: hook install did not create $CODEX_HOME/hooks.json" >&2; exit 1; }
+node -e '
+const h = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+const ours = (h.hooks.SessionStart || []).flatMap((g) => g.hooks || []).filter((x) => /eag-sync/.test(x.command || ""));
+if (ours.length !== 1) { console.error(`FAIL: expected one eag SessionStart hook for Codex, got ${ours.length}`); process.exit(1); }
+if (!ours[0].timeout) { console.error("FAIL: the Codex hook has no timeout"); process.exit(1); }
+' "$CODEX_HOME/hooks.json"
+cmp -s "$CODEX_HOME/config.toml" "$S/config.before-hook.toml" || { echo "FAIL: hook install wrote into config.toml" >&2; exit 1; }
 sh -n "$EAG_HOME/bin/eag-sync" || { echo "FAIL: the launcher is not valid POSIX sh" >&2; exit 1; }
 node -e '
 const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
@@ -347,6 +358,7 @@ A hook uninstall >/dev/null
 grep -q 'easy-agnostic' "$S/shellrc" && { echo "FAIL: hook uninstall left its block in $S/shellrc" >&2; exit 1; }
 [ -f "$EAG_HOME/shell-init.sh" ] && { echo "FAIL: hook uninstall left the generated file behind" >&2; exit 1; }
 [ -f "$EAG_HOME/bin/eag-sync" ] && { echo "FAIL: hook uninstall left the launcher behind" >&2; exit 1; }
+[ -f "$CODEX_HOME/hooks.json" ] && { echo "FAIL: hook uninstall left the Codex hooks file behind" >&2; exit 1; }
 node -e '
 const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
 if (s.model !== "opus" || !s.hooks || !s.hooks.Stop) { console.error("FAIL: hook uninstall removed more than its own entry"); process.exit(1); }

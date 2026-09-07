@@ -151,3 +151,70 @@ test('a settings.json that is not a JSON object is refused, not overwritten', ()
   assert.throws(() => hooks.installClaude(), /is not a JSON object/);
   assert.equal(read(hooks.CLAUDE_SETTINGS), '["not settings"]\n', 'the file must be untouched');
 });
+
+// ---- Codex -----------------------------------------------------------------------------
+// Same shape as Claude's, in $CODEX_HOME/hooks.json, discovered with no pointer in
+// config.toml. (The `hooks` key config.toml does accept is a plugin field, not this.)
+const cxRead = () => JSON.parse(read(hooks.CODEX_HOOKS));
+const cxWrite = (o) => write(hooks.CODEX_HOOKS, `${JSON.stringify(o, null, 2)}\n`);
+const cxReset = () => fs.rmSync(hooks.CODEX_HOOKS, { force: true });
+
+test('installCodex writes $CODEX_HOME/hooks.json and nothing in config.toml', () => {
+  cxReset();
+  const toml = path.join(process.env.CODEX_HOME, 'config.toml');
+  write(toml, 'model = "gpt-5"\n');
+  hooks.installCodex();
+  assert.equal(hooks.CODEX_HOOKS, path.join(process.env.CODEX_HOME, 'hooks.json'));
+  assert.deepEqual(cxRead().hooks.SessionStart[0].hooks, [hooks.codexEntry()]);
+  assert.equal(read(toml), 'model = "gpt-5"\n', 'config.toml is eag\'s managed-block file; the hook must not touch it');
+});
+
+test('the Codex entry is bounded and shows nothing on screen', () => {
+  const e = hooks.codexEntry();
+  assert.ok(e.timeout > 0 && e.timeout <= 30);
+  assert.equal('statusMessage' in e, false, 'statusMessage renders a spinner label; a silent sync must not');
+});
+
+test('installCodex keeps another tool\'s hooks and is idempotent', () => {
+  cxReset();
+  cxWrite({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'echo theirs' }] }], Stop: [{ hooks: [{ type: 'command', command: 'echo stop' }] }] } });
+  hooks.installCodex();
+  const f = cxRead();
+  assert.equal(f.hooks.SessionStart.length, 2);
+  assert.deepEqual(f.hooks.Stop, [{ hooks: [{ type: 'command', command: 'echo stop' }] }]);
+  assert.equal(hooks.installCodex().changed, false);
+});
+
+test('uninstallCodex removes only our entry, and the file when it was only ours', () => {
+  cxReset();
+  cxWrite({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'echo theirs' }] }] } });
+  hooks.installCodex();
+  hooks.uninstallCodex();
+  assert.deepEqual(cxRead().hooks.SessionStart, [{ hooks: [{ type: 'command', command: 'echo theirs' }] }]);
+
+  cxReset();
+  hooks.installCodex();
+  hooks.uninstallCodex();
+  assert.equal(fs.existsSync(hooks.CODEX_HOOKS), false, 'a file that held nothing but our hook is litter');
+});
+
+test('a hooks.json that is not a JSON object is refused, not overwritten', () => {
+  write(hooks.CODEX_HOOKS, '"nope"\n');
+  assert.throws(() => hooks.installCodex(), /is not a JSON object/);
+  assert.equal(read(hooks.CODEX_HOOKS), '"nope"\n');
+  cxReset();
+});
+
+// eag cannot grant Codex's trust — it lives in config.toml outside the managed block — so
+// the least it must do is ask. Never throwing matters: this runs inside `eag doctor`.
+test('codexTrust is best effort and never throws', async () => {
+  cxReset();
+  assert.equal(await hooks.codexTrust(), null, 'no hooks file, nothing to ask about');
+  hooks.installCodex();
+  const before = process.env.PATH;
+  try {
+    process.env.PATH = '/nonexistent';        // no codex to ask
+    assert.equal(await hooks.codexTrust({ timeoutMs: 2000 }), null);
+  } finally { process.env.PATH = before; }
+  cxReset();
+});

@@ -147,13 +147,15 @@ __eag_sync() { command eag apply --quiet || true; }
 codex() { __eag_sync; command codex "$@"; }
 ```
 
-**From a desktop app or an IDE.** Those never read your shell rc, so eag installs a `SessionStart` hook in `~/.claude/settings.json` — merged into your file, leaving every other setting and any other tool's hooks alone. The hook runs `~/.agents/bin/eag-sync`, a POSIX shell launcher with the node interpreter and eag's entry point baked in as absolute paths: a GUI-launched agent on macOS starts with `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, where `node` does not exist, so a hook calling `eag` directly would silently do nothing. The launcher exits 0 whatever happens — a sync problem must never stop an agent from opening.
+**From a desktop app or an IDE.** Those never read your shell rc, so eag installs a `SessionStart` hook in each agent's own config — `~/.claude/settings.json` for Claude Code and `~/.codex/hooks.json` for Codex, both merged into your file and leaving every other setting and any other tool's hooks alone. Both run `~/.agents/bin/eag-sync`, a POSIX shell launcher with the node interpreter and eag's entry point baked in as absolute paths: a GUI-launched agent on macOS starts with `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, where `node` does not exist, so a hook calling `eag` directly would silently do nothing. The launcher exits 0 whatever happens — a sync problem must never stop an agent from opening.
+
+**Codex needs one approval.** It will not run a hook it has not been told to trust, and it says nothing at all when it skips one. eag cannot grant that trust for you: it lives in `config.toml` outside the block eag owns, and approving its own hook is not eag's call. So open Codex once, run `/hooks`, and approve it. Until you do, `eag hook status` and `eag doctor` say so plainly rather than letting it fail in silence.
 
 Either way, `--quiet` says nothing when there is nothing to do. When there is a problem — a conflict it refuses to resolve for you, an entry the agent's own CLI rejects — it prints it **once** and then stays quiet until the problem changes, so a chronic one never trains you to ignore the line. `eag status` and `eag doctor` always show everything.
 
 The generated file is refreshed by every `eag apply`, so an agent you install later gets wrapped without you touching your rc again. A refresh only ever adds: the hook launcher runs with a minimal PATH where no agent binary is visible, and rebuilding the list there would delete every wrapper.
 
-**What is still not covered.** Codex has a lifecycle hook system of its own but gates a newly written hook behind an interactive trust approval, so eag does not install one yet; a Codex opened from the ChatGPT app syncs on your next terminal launch. `fish` is not supported yet either — the generated file is POSIX shell, though the `SessionStart` hook works regardless of your shell. And on macOS the same GUI/terminal split is why credentials are written resolved by default: a GUI-launched process gets the launchd environment, where your shell exports do not exist.
+**What is still not covered.** `fish` is not supported for the terminal half — the generated file is POSIX shell — though the `SessionStart` hooks work regardless of your shell. And on macOS the same GUI/terminal split is why credentials are written resolved by default: a GUI-launched process gets the launchd environment, where your shell exports do not exist.
 
 ## Environment
 

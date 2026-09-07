@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { EAG_HOME, CLAUDE_CONFIG_DIR } from './paths.js';
+import { spawn } from 'node:child_process';
+import { EAG_HOME, CLAUDE_CONFIG_DIR, CODEX_HOME } from './paths.js';
 import { exists, readJson, writeFileAtomic, backup, deepEqual } from './util.js';
 
 // The shell wrapper only covers terminal launches. An agent started from a desktop app or
@@ -117,4 +118,113 @@ export function uninstallClaude({ dryRun = false, backupDir } = {}) {
     writeFileAtomic(CLAUDE_SETTINGS, `${JSON.stringify(s, null, 2)}\n`);
   }
   return { file: CLAUDE_SETTINGS, changed: true };
+}
+
+// ---- Codex ------------------------------------------------------------------------------
+// $CODEX_HOME/hooks.json is discovered implicitly — no pointer in config.toml. (The `hooks`
+// key the binary documents as "Hook config path" is a plugin.json field, not a config one.)
+// The shape is the same as Claude's, which is not a coincidence: Codex mirrored it.
+export const CODEX_HOOKS = path.join(CODEX_HOME, 'hooks.json');
+const codexIsOurs = (h) => typeof h?.command === 'string' && h.command.includes(LAUNCHER);
+
+// No statusMessage: it renders a spinner label, and a sync nobody asked to watch should not
+// put anything on screen. timeout for the same reason it is set for Claude.
+export function codexEntry() { return { type: 'command', command: claudeCommand(), timeout: 20 }; }
+
+export function codexState() {
+  const f = readJson(CODEX_HOOKS, null);
+  const groups = Array.isArray(f?.hooks?.SessionStart) ? f.hooks.SessionStart : [];
+  const found = groups.flatMap((g) => (Array.isArray(g?.hooks) ? g.hooks : [])).filter(codexIsOurs);
+  return {
+    file: CODEX_HOOKS,
+    exists: f !== null,
+    installed: found.length > 0,
+    current: found.length === 1 && deepEqual(found[0], codexEntry()),
+    hooks: f,
+  };
+}
+
+export function installCodex({ dryRun = false, backupDir } = {}) {
+  const st = codexState();
+  if (st.current) return { file: CODEX_HOOKS, changed: false };
+  if (st.exists && !isPlainObject(st.hooks)) {
+    throw new Error(`${CODEX_HOOKS} is not a JSON object; fix it by hand, then run eag hook install`);
+  }
+  const f = st.exists ? structuredClone(st.hooks) : {};
+  f.hooks = isPlainObject(f.hooks) ? f.hooks : {};
+  const groups = (Array.isArray(f.hooks.SessionStart) ? f.hooks.SessionStart : [])
+    .map((g) => (Array.isArray(g?.hooks) ? { ...g, hooks: g.hooks.filter((h) => !codexIsOurs(h)) } : g))
+    .filter((g) => !Array.isArray(g?.hooks) || g.hooks.length > 0);
+  f.hooks.SessionStart = [...groups, { hooks: [codexEntry()] }];
+  if (!dryRun) {
+    if (st.exists && backupDir) backup(CODEX_HOOKS, backupDir, 'codex-hooks');
+    fs.mkdirSync(path.dirname(CODEX_HOOKS), { recursive: true });
+    writeFileAtomic(CODEX_HOOKS, `${JSON.stringify(f, null, 2)}\n`);
+  }
+  return { file: CODEX_HOOKS, changed: true, created: !st.exists };
+}
+
+export function uninstallCodex({ dryRun = false, backupDir } = {}) {
+  const st = codexState();
+  if (!st.exists || !st.installed) return { file: CODEX_HOOKS, changed: false };
+  const f = structuredClone(st.hooks);
+  f.hooks.SessionStart = f.hooks.SessionStart
+    .map((g) => (Array.isArray(g?.hooks) ? { ...g, hooks: g.hooks.filter((h) => !codexIsOurs(h)) } : g))
+    .filter((g) => !Array.isArray(g?.hooks) || g.hooks.length > 0);
+  if (!f.hooks.SessionStart.length) delete f.hooks.SessionStart;
+  const empty = !Object.keys(f.hooks).length;
+  if (empty) delete f.hooks;
+  if (!dryRun) {
+    if (backupDir) backup(CODEX_HOOKS, backupDir, 'codex-hooks');
+    if (empty && !Object.keys(f).length) fs.rmSync(CODEX_HOOKS, { force: true });
+    else writeFileAtomic(CODEX_HOOKS, `${JSON.stringify(f, null, 2)}\n`);
+  }
+  return { file: CODEX_HOOKS, changed: true };
+}
+
+// Codex will not run a hook it has not been told to trust, and it says NOTHING when it
+// skips one: a user who never opens /hooks would believe sync-on-launch works. eag cannot
+// grant that trust itself — it lives in config.toml outside the managed block, and eag does
+// not edit there — so the least it must do is ask Codex and report the answer.
+//
+// Best effort by construction: no Codex, a slow daemon or a changed RPC returns null, and
+// the caller says "unknown" rather than failing anything.
+// Async because stdin has to stay open until the answer arrives: the server reads requests
+// as a stream, and closing the pipe after writing (what execFileSync does) makes it exit
+// before it has replied.
+export function codexTrust({ timeoutMs = 8000 } = {}) {
+  if (!exists(CODEX_HOOKS)) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    let p;
+    try {
+      p = spawn('codex', ['app-server'], { stdio: ['pipe', 'pipe', 'ignore'] });
+    } catch { resolve(null); return; }
+    let done = false;
+    const finish = (v) => { if (done) return; done = true; try { p.kill(); } catch { /* already gone */ } resolve(v); };
+    const timer = setTimeout(() => finish(null), timeoutMs);
+    timer.unref?.();
+    p.on('error', () => finish(null));
+    p.on('close', () => finish(null));
+    let buf = '';
+    p.stdout.on('data', (d) => {
+      buf += d;
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        let j;
+        try { j = JSON.parse(line); } catch { continue; }
+        if (j?.id !== 2) continue;
+        clearTimeout(timer);
+        const all = (j.result?.data || []).flatMap((d2) => d2.hooks || []);
+        const ours = all.filter((h) => h.sourcePath === CODEX_HOOKS && typeof h.command === 'string' && h.command.includes(LAUNCHER));
+        finish(ours.length ? { key: ours[0].key, hash: ours[0].currentHash, status: ours[0].trustStatus, enabled: ours[0].enabled } : null);
+        return;
+      }
+    });
+    for (const r of [
+      { jsonrpc: '2.0', id: 1, method: 'initialize', params: { clientInfo: { name: 'eag', title: 'eag', version: '0' } } },
+      { jsonrpc: '2.0', method: 'initialized', params: {} },
+      { jsonrpc: '2.0', id: 2, method: 'hooks/list', params: {} },
+    ]) { try { p.stdin.write(`${JSON.stringify(r)}\n`); } catch { finish(null); return; } }
+  });
 }
