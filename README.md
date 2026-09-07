@@ -4,50 +4,6 @@ Keep MCP servers (and the wiring for skills and instructions) in sync across **C
 
 Status: v0 spike. Targets: Claude Code (user scope via `claude mcp`, project scope is native), Codex (managed block in `config.toml`, user + project), Pi (reads the source directly through `pi-mcp-adapter`, nothing to write).
 
-## How it works
-
-- **Source of truth**: `~/.agents/mcp.json` (user) and `./.mcp.json` (project). Same `mcpServers` shape Claude Code, Pi, Cursor and the Agent Plugins spec already use. `~/.agents/agents.json` says which agents are targets and per-server exceptions.
-- **Secrets by reference**: the source only contains `${NAME}`. Values live in the OS secret store (`eag secret set NAME`): the macOS keychain, `secret-tool` on Linux, or a 0600 `~/.agents/.secrets.env` when neither is available (`EAG_SECRET_BACKEND` overrides the choice). A lookup tries the active store, then that file, then the variable in eag's own environment, so a stale entry in either can shadow what you expect. Codex gets `bearer_token_env_var` / `env_vars`; Claude Code gets the resolved value (see the note on launch context under "Known limits"); Pi expands `${NAME}` from its own environment. `eval "$(eag env)"` in your shell rc makes the variables available. A `${NAME}` that is not in the store falls back to the value that variable already has in eag's own environment.
-- **3-way merge**: every apply compares what the source wants, what eag wrote last time (`.state/`), and what the agent's file has now. Entries eag never wrote are left alone. A native edit after the last apply is a conflict: eag stops and shows it instead of overwriting.
-- **Never breaks an agent**: Codex TOML is validated before the file is replaced; writes are atomic; a backup of the previous file is kept under `.state/backup/`.
-
-## The source
-
-`~/.agents/mcp.json` is a plain `mcpServers` file — the same shape Claude Code, Pi, Cursor and the Agent Plugins spec already read, so it is useful even if you stop using eag:
-
-```json
-{
-  "mcpServers": {
-    "linear": {
-      "type": "http",
-      "url": "https://mcp.linear.app/mcp",
-      "headers": { "Authorization": "Bearer ${LINEAR_TOKEN}" }
-    },
-    "freepik": {
-      "type": "stdio",
-      "command": "/usr/local/bin/uv",
-      "args": ["run", "--directory", "~/mcp-servers/freepik-mcp", "main.py"],
-      "env": { "FREEPIK_API_KEY": "${FREEPIK_API_KEY}" }
-    }
-  }
-}
-```
-
-`~/.agents/agents.json` holds every tool-specific decision, so `mcp.json` stays portable:
-
-```json
-{
-  "targets": { "claude": true, "codex": true, "pi": "read-only" },
-  "servers": {
-    "linear":  { "targets": { "codex": false } },
-    "freepik": { "codex": { "startup_timeout_sec": 120 } }
-  }
-}
-```
-
-`targets` turns a whole agent on or off. Under `servers`, `targets` is the per-server exception (`eag mcp target linear codex off` writes it), and a key named after an agent carries options only that agent understands. Note that `targets` governs what eag *writes*: Pi reads `mcp.json` itself, so a server in the source reaches Pi whichever way those switches are set.
-
-
 ## Setup
 
 The fastest way is to hand it to the coding agent you already have open — Claude Code, Codex, Pi — and let it do the work. Paste this:
@@ -117,6 +73,50 @@ eag apply --dry-run           # preview, then without --dry-run to write (user s
 eag hook install              # sync on launch; safe to re-run, undo with eag hook uninstall
 eag doctor --fix              # checks skills symlinks, @AGENTS.md, Codex trust, Pi adapter, secrets; --fix repairs what is safe
 ```
+
+## How it works
+
+- **Source of truth**: `~/.agents/mcp.json` (user) and `./.mcp.json` (project). Same `mcpServers` shape Claude Code, Pi, Cursor and the Agent Plugins spec already use. `~/.agents/agents.json` says which agents are targets and per-server exceptions.
+- **Secrets by reference**: the source only contains `${NAME}`. Values live in the OS secret store (`eag secret set NAME`): the macOS keychain, `secret-tool` on Linux, or a 0600 `~/.agents/.secrets.env` when neither is available (`EAG_SECRET_BACKEND` overrides the choice). A lookup tries the active store, then that file, then the variable in eag's own environment, so a stale entry in either can shadow what you expect. Codex gets `bearer_token_env_var` / `env_vars`; Claude Code gets the resolved value (see the note on launch context under "Known limits"); Pi expands `${NAME}` from its own environment. `eval "$(eag env)"` in your shell rc makes the variables available. A `${NAME}` that is not in the store falls back to the value that variable already has in eag's own environment.
+- **3-way merge**: every apply compares what the source wants, what eag wrote last time (`.state/`), and what the agent's file has now. Entries eag never wrote are left alone. A native edit after the last apply is a conflict: eag stops and shows it instead of overwriting.
+- **Never breaks an agent**: Codex TOML is validated before the file is replaced; writes are atomic; a backup of the previous file is kept under `.state/backup/`.
+
+## The source
+
+`~/.agents/mcp.json` is a plain `mcpServers` file — the same shape Claude Code, Pi, Cursor and the Agent Plugins spec already read, so it is useful even if you stop using eag:
+
+```json
+{
+  "mcpServers": {
+    "linear": {
+      "type": "http",
+      "url": "https://mcp.linear.app/mcp",
+      "headers": { "Authorization": "Bearer ${LINEAR_TOKEN}" }
+    },
+    "freepik": {
+      "type": "stdio",
+      "command": "/usr/local/bin/uv",
+      "args": ["run", "--directory", "~/mcp-servers/freepik-mcp", "main.py"],
+      "env": { "FREEPIK_API_KEY": "${FREEPIK_API_KEY}" }
+    }
+  }
+}
+```
+
+`~/.agents/agents.json` holds every tool-specific decision, so `mcp.json` stays portable:
+
+```json
+{
+  "targets": { "claude": true, "codex": true, "pi": "read-only" },
+  "servers": {
+    "linear":  { "targets": { "codex": false } },
+    "freepik": { "codex": { "startup_timeout_sec": 120 } }
+  }
+}
+```
+
+`targets` turns a whole agent on or off. Under `servers`, `targets` is the per-server exception (`eag mcp target linear codex off` writes it), and a key named after an agent carries options only that agent understands. Note that `targets` governs what eag *writes*: Pi reads `mcp.json` itself, so a server in the source reaches Pi whichever way those switches are set.
+
 
 ## For agents
 
