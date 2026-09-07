@@ -6,9 +6,11 @@ Status: v0 spike. Targets: Claude Code (user scope via `claude mcp`, project sco
 
 ## Setup
 
-The fastest way is to hand it to the coding agent you already have open — Claude Code, Codex, Pi — and let it do the work. Paste this:
+The fastest way is to hand it to the coding agent you already have open — Claude Code, Codex, Pi. Copy this and paste it to your agent:
 
-> Install and set up **easy-agnostic** (the `eag` CLI) so my MCP servers and skills stay in sync across Claude Code, Codex and Pi. Run `npx easy-agnostic setup` (not `npx eag`, that is a different package), then `eag doctor`, and show me what it reports. It will leave two things for me to do by hand — open a new terminal, and approve a hook in Codex (`/hooks` in the terminal, or Settings → Hooks in the ChatGPT app) — tell me when to do them. Do not use sudo; if `npm i -g` fails, stop and tell me.
+```text
+Install and set up easy-agnostic (the `eag` CLI) so my MCP servers and skills stay in sync across Claude Code, Codex and Pi. Run `npx easy-agnostic setup` (not `npx eag`, that is a different package), then `eag doctor`, and show me what it reports. It will leave two things for me to do by hand — open a new terminal, and approve a hook in Codex (`/hooks` in the terminal, or Settings → Hooks in the ChatGPT app) — tell me when to do them. Do not use sudo; if `npm i -g` fails, stop and tell me.
+```
 
 Or run it yourself:
 
