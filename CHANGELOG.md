@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.7.0 — 2026-09-07
+
+Updates without anyone remembering to update.
+
+- **`npx easy-agnostic setup` now installs eag globally first** (`npm i -g`). Everything downstream
+  — the shell wrappers, the launch hooks, `eag update` — assumes a stable `eag`, and an npx run gives
+  neither: the package sits in an evictable cache and is never on PATH. The first outside tester's
+  shell file was silently skipping everything for exactly that reason while `doctor` reported it wired.
+- **`eag update`** installs the latest version in place and refreshes the launcher, shell file and skill.
+  `--check` only reports. A linked checkout is left to git; an npx cache is told to install globally.
+- **Every `eag apply` checks the registry at most once a day** (cached in `.state/update.json`, 3 s
+  timeout, offline is fine) and, for a global install, installs a newer version in the background so
+  the next launch runs it. `"autoUpdate": false` in `agents.json` or `EAG_NO_UPDATE=1` turns that off;
+  a checkout or npx install is told once instead.
+- **The launch hook runs the installed `eag`, not the package it was generated from**, always through the
+  resolved node (the installed one is a node script too, and a GUI launch has no node on PATH). So an
+  upgrade takes effect on the next launch with no rewrite, and a launcher generated from an npx cache
+  outlives that cache.
+- **The shell file puts npm's global bin dir on PATH before looking for `eag`**, so it works even in a
+  shell whose rc never had it.
+- `doctor` reports how eag itself is installed (global / linked checkout / npx cache) and treats the
+  npx case as a problem, with the fix.
+
 ## 0.6.1 — 2026-09-07
 
 Found by the first outside tester, on a Mac with the ChatGPT app.

@@ -11,6 +11,7 @@ import * as pi from '../adapters/pi.js';
 import * as shell from '../shell.js';
 import { migratable } from '../projects.js';
 import * as skillsMod from '../skills.js';
+import { installKind, onPath, globalBinDir, VERSION } from '../update.js';
 import * as hooks from '../hooks.js';
 import * as claude from '../adapters/claude.js';
 
@@ -118,12 +119,20 @@ async function checks(fix, root, out) {
   // shell wiring for ${VAR}
   const rc = process.env.EAG_SHELL_RC || path.join(os.homedir(), process.env.SHELL?.endsWith('zsh') ? '.zshrc' : '.bashrc');
   const rcText = exists(rc) ? fs.readFileSync(rc, 'utf8') : '';
+  // How eag itself is installed decides whether anything below can keep working: an npx
+  // cache is evictable and never on PATH, so hooks pin a path that disappears and the shell
+  // file finds no `eag` at all.
+  const kind = installKind();
+  if (kind === 'npx') out.push({ level: 'bad', msg: `eag ${VERSION} runs from the npx cache: evictable, never on PATH, never updated. Run: npm i -g easy-agnostic` });
+  else if (kind === 'global' && !onPath('eag')) out.push({ level: 'warn', msg: `eag is installed globally but ${globalBinDir() || 'its bin dir'} is not on PATH in this shell; the generated shell file adds it` });
+  else out.push({ level: 'ok', msg: `eag ${VERSION} (${kind === 'dev' ? 'linked checkout' : 'global install'})` });
+
   // Sync-on-launch, and the ${VAR} exports it carries. Either the generated file is wired
   // up, or the older bare `eval "$(eag env)"` line is there and at least the exports work.
   const rcSt = shell.rcState(rc);
   if (rcSt.linked) {
     const bins = shell.wrappableBins();
-    const current = exists(shell.INIT_FILE) && fs.readFileSync(shell.INIT_FILE, 'utf8') === shell.render(bins);
+    const current = exists(shell.INIT_FILE) && fs.readFileSync(shell.INIT_FILE, 'utf8') === shell.render(bins, { binDir: shell.binDirInFile() });
     out.push(current
       ? { level: 'ok', msg: `shell: ${path.basename(rc)} syncs on launch${bins.length ? ` (${bins.join(', ')})` : ''}` }
       : { level: 'warn', msg: `shell: ${shell.INIT_FILE} is out of date. Run: eag hook install` });
@@ -135,7 +144,7 @@ async function checks(fix, root, out) {
   // The other half of sync-on-launch: an agent opened from a desktop app or an IDE reads no
   // rc, so only its own session hook reaches it.
   const cl = hooks.claudeState();
-  const launcherOk = exists(hooks.LAUNCHER) && fs.readFileSync(hooks.LAUNCHER, 'utf8') === hooks.renderLauncher();
+  const launcherOk = exists(hooks.LAUNCHER) && fs.readFileSync(hooks.LAUNCHER, 'utf8') === hooks.renderLauncher({ binDir: globalBinDir() });
   const cx = hooks.codexState();
   if (cl.current && launcherOk) out.push({ level: 'ok', msg: 'app/IDE launches: Claude Code SessionStart hook installed' });
   else if (cl.installed && !launcherOk) out.push({ level: 'bad', msg: `Claude Code runs a SessionStart hook pointing at ${hooks.LAUNCHER}, which is missing or stale. Run: eag hook install` });

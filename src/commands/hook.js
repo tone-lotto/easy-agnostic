@@ -7,6 +7,7 @@ import * as hooks from '../hooks.js';
 import * as claude from '../adapters/claude.js';
 import { CODEX_HOME } from '../paths.js';
 import { fileURLToPath } from 'node:url';
+import { globalBinDir } from '../update.js';
 
 // eag ships its own skill. Copied into ~/.agents/skills it reaches every agent: Codex reads
 // that directory itself, doctor links it into ~/.claude/skills. That is how an agent that was
@@ -55,7 +56,7 @@ async function status() {
   const initCurrent = initThere && fs.readFileSync(shell.INIT_FILE, 'utf8') === shell.render(bins);
   const cl = hooks.claudeState();
   const cx = hooks.codexState();
-  const launcherCurrent = exists(hooks.LAUNCHER) && fs.readFileSync(hooks.LAUNCHER, 'utf8') === hooks.renderLauncher();
+  const launcherCurrent = exists(hooks.LAUNCHER) && fs.readFileSync(hooks.LAUNCHER, 'utf8') === hooks.renderLauncher({ binDir: globalBinDir() });
 
   console.log(c.bold('terminal launches'));
   console.log(`  ${initThere && initCurrent ? c.ok('✓') : c.warn('!')} ${shell.INIT_FILE}${initThere ? (initCurrent ? '' : c.warn(' (out of date)')) : c.dim(' (not generated)')}`);
@@ -86,7 +87,7 @@ export async function run(args, flags) {
       console.log(`${c.warn('skipped')} ${shell.rcPath()} is fish; the generated file is POSIX shell. The session hook below still works.`);
     } else {
       const bins = shell.wrappableBins();
-      const w = shell.writeInit(bins, { dryRun: dry });
+      const w = shell.writeInit(bins, { dryRun: dry, binDir: globalBinDir() });
       console.log(w.changed
         ? `${c.ok(w.created ? 'created' : 'updated')} ${w.file}${bins.length ? c.dim(` (wraps ${bins.join(', ')})`) : ''}`
         : `${c.dim('current')} ${w.file}`);
@@ -98,7 +99,7 @@ export async function run(args, flags) {
     }
 
     // 2. app and IDE launches: a POSIX launcher the agent's own hook engine can run
-    const l = hooks.writeLauncher({ dryRun: dry });
+    const l = hooks.writeLauncher({ dryRun: dry, binDir: globalBinDir() });
     console.log(l.changed ? `${c.ok(l.created ? 'created' : 'updated')} ${l.file}` : `${c.dim('current')} ${l.file}`);
     if (claude.available() || hooks.claudeState().exists) {
       const h = hooks.installClaude({ dryRun: dry, backupDir: backupDir() });

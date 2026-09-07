@@ -34,6 +34,7 @@ src/secrets.js          keychain (macOS `security`), secret-tool (Linux), .secre
 src/state.js            last-apply snapshot per target (.state/<target>.json)
 src/projects.js         Claude's per-project "local" servers: discovery and skip reasons for adopt --all-projects
 src/skills.js           skills that only one agent has: plan (adopt/duplicate/collision) and the move into ~/.agents/skills
+src/update.js           install kind (global / npx / dev), throttled registry check, self-update; consumed by setup, apply, update, doctor
 src/shell.js            generated ~/.agents/shell-init.sh + rc wiring (terminal launches)
 src/hooks.js            ~/.agents/bin/eag-sync launcher + the agents' own session hooks (app/IDE launches)
 src/merge.js            the 3-way merge; pure function, no I/O
@@ -101,6 +102,15 @@ The other half, for launches that never see a shell (`src/hooks.js`):
 - **eag does not grant Codex's hook trust.** Codex records it in `config.toml` under `[hooks.state."<path>:session_start:0:0"]` and refuses to run an unapproved hook *in total silence*. Writing that entry would mean editing outside the managed block and approving eag's own code on the user's behalf — so `eag hook install`, `eag hook status` and `eag doctor` ask Codex for the state (`hooks/list` over `codex app-server`) and report it instead. `--dangerously-bypass-hook-trust` exists and must never be recommended.
 - **The trust query is async and best effort.** stdin has to stay open until the reply arrives — `execFileSync` with `input` closes the pipe and the server exits first — and any failure resolves to null so `doctor` degrades to "unknown" rather than breaking.
 - **`claude.secrets` defaults to `literal`** for the same GUI reason: a launchd environment has none of the shell's exports.
+
+## Install kinds and updates
+
+eag is run by hooks and wrappers that have no PATH and live on after the thing that installed eag is gone, so `src/update.js` classifies the install and everything else adapts:
+- **global** (`npm i -g`): stable path, updated in place. `setup` converts an npx run into this first.
+- **npx**: evictable cache, never on PATH. Never updated in place; `doctor` calls it a problem.
+- **dev** (a checkout under `npm link`, detected by a `.git` above the package): never overwritten by npm; `update` says to use git. This machine is one.
+- The launcher tries the installed `eag` (npm's global bin dir, baked in at install) before the package it was generated from, always through the resolved node. The shell file adds that bin dir to PATH before looking for `eag`.
+- `apply` calls `checkThrottled()` (once a day, `.state/update.json`, 3 s timeout, offline keeps the last answer) and `selfUpdate(v, {detached: true})` for a global install. `EAG_NO_UPDATE=1` — set by the e2e — or `agents.json` `autoUpdate: false` disables it.
 
 ## Agent operability
 

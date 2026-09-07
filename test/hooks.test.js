@@ -26,7 +26,8 @@ test('the launcher hardcodes absolute paths instead of trusting PATH', () => {
   const text = hooks.renderLauncher({ node: '/opt/n/bin/node', entry: '/opt/eag/bin/eag.js' });
   assert.match(text, /^NODE='\/opt\/n\/bin\/node'$/m);
   assert.match(text, /^EAG='\/opt\/eag\/bin\/eag\.js'$/m);
-  assert.match(text, /"\$NODE" "\$EAG" apply --quiet/);
+  assert.match(text, /"\$NODE" "\$c" apply --quiet/, 'every candidate runs through the resolved node');
+  assert.match(text, /"\$EAG"; do/, 'the generating package is the last resort');
 });
 
 test('the launcher runs and syncs with no PATH and no shell rc', () => {
@@ -227,4 +228,22 @@ test('the shipped skill is a valid skill: frontmatter with name and description'
   for (const must of ['eag status', 'eag apply', 'eag mcp add', 'eag secret set', 'eag doctor', 'exit', '${NAME}', '--prefer']) {
     assert.ok(text.includes(must), `the skill must teach "${must}"`);
   }
+});
+
+// After `npm i -g` upgrades eag, the launcher must run the NEW version without being
+// rewritten, and a launcher generated from an npx cache must outlive that cache.
+test('the launcher prefers the installed eag over the package it was generated from', () => {
+  const text = hooks.renderLauncher({ node: '/n', entry: '/pkg/bin/eag.js', binDir: '/g/bin' });
+  const order = text.indexOf('"$BIN/eag"');
+  const entry = text.indexOf('"$EAG"; do');
+  assert.ok(order > 0 && entry > order, 'the installed binary is tried first, the entry point last');
+  assert.match(text, /^BIN='\/g\/bin'$/m);
+  assert.match(text, /"\$NODE" "\$c" apply --quiet/, 'always through the resolved node: the installed eag is a node script and PATH has no node');
+  // A fake installed eag that records it ran; a real node to run it with.
+  const bin = path.join(dir, 'gbin'); fs.mkdirSync(bin, { recursive: true });
+  const marker = path.join(dir, 'ran-installed');
+  fs.writeFileSync(path.join(bin, 'eag'), `require('fs').writeFileSync(${JSON.stringify(marker)}, process.argv.slice(2).join(' '));\n`);
+  const f = path.join(dir, 'launcher-prefers'); fs.writeFileSync(f, hooks.renderLauncher({ node: process.execPath, entry: '/nope/eag.js', binDir: bin }));
+  execFileSync('/bin/sh', [f], { env: { PATH: '/nonexistent', HOME: process.env.HOME } });
+  assert.equal(fs.readFileSync(marker, 'utf8').trim(), 'apply --quiet', 'the installed eag ran, with a PATH that has nothing on it');
 });

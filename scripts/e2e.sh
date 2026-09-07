@@ -58,6 +58,7 @@ command -v claude >/dev/null 2>&1 || { echo "missing claude CLI on PATH: init en
 unset EAG_PROJECT   # project scope must resolve from cwd ($S/proj), never from the developer's shell
 export EAG_HOME="$S/agents" CLAUDE_CONFIG_DIR="$S/cc" CODEX_HOME="$S/codex" PI_CODING_AGENT_DIR="$S/pi" EAG_SECRET_SERVICE=eag-test
 export EAG_SHELL_RC="$S/shellrc"   # doctor checks the `eval "$(eag env)"` line here, not in your real rc
+export EAG_NO_UPDATE=1             # apply checks the registry once a day; this run must stay offline
 BIN="$REPO/bin/eag.js"
 A() { node "$BIN" "$@"; }
 mode() { stat -f %Lp "$1" 2>/dev/null || stat -c %a "$1"; }

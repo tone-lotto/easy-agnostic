@@ -161,6 +161,11 @@ The generated file is refreshed by every `eag apply`, so an agent you install la
 
 **What is still not covered.** `fish` is not supported for the terminal half — the generated file is POSIX shell — though the `SessionStart` hooks work regardless of your shell. And on macOS the same GUI/terminal split is why credentials are written resolved by default: a GUI-launched process gets the launchd environment, where your shell exports do not exist.
 
+## Staying up to date
+
+`npx easy-agnostic setup` installs eag globally on its first run, because everything that syncs on launch needs a stable `eag` on PATH — the npx cache is neither stable nor on PATH. From then on every `eag apply` (so every agent launch) asks the registry at most once a day and, for a global install, installs a newer version in the background; the next launch runs it. `eag update` does it now, `eag update --check` only looks. `"autoUpdate": false` in `~/.agents/agents.json` turns the background update off.
+
+
 ## Environment
 
 `EAG_HOME` (default `~/.agents`), `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `PI_CODING_AGENT_DIR`, `EAG_PROJECT`, `EAG_SECRET_SERVICE`, `EAG_SECRET_BACKEND=keychain|secret-tool|file`, `EAG_DEBUG` (print stack traces). `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and `PI_CODING_AGENT_DIR` are the agents' own variables, so the whole tool can be pointed at a sandbox (see `scripts/e2e.sh`); the rest are eag's.

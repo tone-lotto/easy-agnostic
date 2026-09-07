@@ -4,6 +4,7 @@ import { run as adoptRun } from './adopt.js';
 import { run as applyRun } from './apply.js';
 import { run as hookRun } from './hook.js';
 import { run as doctorRun } from './doctor.js';
+import { installKind, onPath, selfUpdate, VERSION } from '../update.js';
 
 
 // The one-command path for the common case: detect what's installed, import what each
@@ -20,6 +21,19 @@ export async function run(_args, flags) {
     catch (e) { console.log(`  ${c.bad('error')} ${e.message}`); ok = false; }
   };
 
+  // Everything downstream — the shell wrappers, the launch hooks, `eag update` — assumes a
+  // stable `eag` on PATH. `npx easy-agnostic setup` gives neither: the package sits in an
+  // evictable cache and is never on PATH. Put it where npm puts things, once.
+  if (scope === 'user' && !flags.project) {
+    const kind = installKind();
+    if (kind === 'npx' || (kind === 'global' && !onPath('eag'))) {
+      console.log(`\n${c.bold('0/8 install')}`);
+      if (kind === 'npx') {
+        const r = selfUpdate(VERSION, { fromNpx: true });
+        console.log(r.ok ? `  ${c.ok('installed')} easy-agnostic ${VERSION} globally (npm i -g), so hooks and wrappers have a stable eag` : `  ${c.warn('could not install globally')}: ${r.reason}\n  ${c.dim('run: npm i -g easy-agnostic   (sync on launch needs eag on PATH)')}`);
+      } else console.log(`  ${c.warn('eag is installed but not on PATH')}; the shell file will add its directory`);
+    }
+  }
   await step('1/8 init', () => initRun([], flags.project ? { project: true } : {}));
   await step('2/8 adopt claude', () => adoptRun(['claude'], { scope }));
   await step('3/8 adopt codex', () => adoptRun(['codex'], { scope }));

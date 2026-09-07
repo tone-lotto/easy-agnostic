@@ -35,6 +35,8 @@ Usage: eag <command> [options]
                                         values for \${NAME} references, kept in the OS secret store; with no flag the
                                         value is read from stdin (pipe) or prompted. --value lands in shell history.
   env                                   print "export NAME=..." lines for every referenced secret
+  update [--check]                      install the latest version in place; every apply also checks once a day and
+                                        updates a global install in the background (agents.json "autoUpdate": false stops it)
   doctor [--fix]                        wiring checks: skills symlinks, @AGENTS.md, Codex trust, Pi adapter, secrets
   --version                             print the version
 
@@ -56,7 +58,7 @@ export function parseArgs(argv) {
   }
   return { flags, positional };
 }
-const BOOL = new Set(['dry-run', 'exit-code', 'fix', 'force', 'project', 'help', 'version', 'quiet', 'from-env', 'all-projects', 'keep-local', 'no-projects', 'json']);
+const BOOL = new Set(['dry-run', 'exit-code', 'fix', 'force', 'project', 'help', 'version', 'quiet', 'from-env', 'all-projects', 'keep-local', 'no-projects', 'json', 'check']);
 function push(flags, k, v) { if (flags[k] === undefined) flags[k] = v; else flags[k] = [].concat(flags[k], v); }
 
 // Unknown flags used to be parsed and then ignored, so `--dryrun` wrote for real and
@@ -73,6 +75,7 @@ const COMMAND_FLAGS = {
   secret: ['value', 'from-env'],
   env: [],
   doctor: ['fix', 'json'],
+  update: ['check', 'force'],
 };
 
 // `eag <cmd> --help` used to print the global help, so a flag not in the summary line was
@@ -125,6 +128,10 @@ eag secret ls | rm <NAME>
   With no flag the value is read from stdin when piped, or prompted without echo. --value lands in shell history.`,
   env: `eag env
   Print export lines for every referenced secret. Meant for eval "$(eag env)"; the generated shell-init.sh does it.`,
+  update: `eag update [--check] [--force]
+  Install the latest version in place (npm i -g) and refresh the launcher, shell file and skill. --check only
+  reports. Every eag apply also checks the registry at most once a day and, for a global install, updates in
+  the background unless agents.json has "autoUpdate": false.`,
   doctor: `eag doctor [--fix] [--json]
   Wiring checks: skills symlinks, @AGENTS.md, Codex trust, Pi adapter, hook trust, secrets that are set but not
   exported, projects only Claude can see, literal credentials in the source. --fix repairs symlinks, dedupes
@@ -148,6 +155,7 @@ export async function main(argv) {
     secret: () => import('./commands/secret.js'),
     env: () => import('./commands/env.js'),
     doctor: () => import('./commands/doctor.js'),
+    update: () => import('./commands/update.js'),
   }[cmd];
   if (!mod) { console.error(`${c.bad('unknown command')} ${cmd}\n\n${HELP}`); return 1; }
   const allowed = new Set([...GLOBAL_FLAGS, ...COMMAND_FLAGS[cmd]]);

@@ -202,3 +202,17 @@ test('rcPath honours EAG_SHELL_RC, then picks by $SHELL', () => {
     assert.equal(shell.isFish(shell.rcPath()), false);
   } finally { process.env.SHELL = realShell; process.env.EAG_SHELL_RC = rc(); }
 });
+
+// An npx-only user has no `eag` on PATH, so the generated file used to skip everything —
+// no exports, no wrappers — while doctor said sync-on-launch was wired.
+test('the generated file puts the global bin dir on PATH before looking for eag', () => {
+  const text = shell.render(['codex'], { binDir: '/g/bin' });
+  const add = text.indexOf('PATH="/g/bin:$PATH"');
+  const look = text.indexOf('command -v eag');
+  assert.ok(add > 0 && add < look, 'PATH is fixed before eag is looked up');
+  assert.match(text, /case ":\$PATH:" in \*":\/g\/bin:"\*\)/, 'and not added twice');
+  shell.writeInit(['codex'], { binDir: '/g/bin' });
+  assert.equal(shell.binDirInFile(), '/g/bin');
+  shell.refreshInit();
+  assert.equal(shell.binDirInFile(), '/g/bin', 'a refresh keeps the bin dir it was installed with');
+});
