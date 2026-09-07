@@ -51,6 +51,40 @@ function splitBlock(text) {
 
 export function canonical(obj) { return sortKeys(obj); }
 
+// Tables inside ANOTHER tool's marker block ("# >>> simbos managed >>>" … "# <<< … <<<").
+// Returns name -> owner label. Whole-line match, same discipline as our own markers.
+function foreignBlocks(text) {
+  const owners = new Map();
+  const lines = text.split('\n');
+  let owner = null;
+  let buf = [];
+  for (const line of lines) {
+    const t = line.trim();
+    const open = /^# >>> (.+?) >>>$/.exec(t);
+    const close = /^# <<< (.+?) <<<$/.exec(t);
+    if (open && !t.includes('easy-agnostic')) { owner = open[1].replace(/\s*\(.*\)\s*$/, '').replace(/\s+managed$/, ''); buf = []; continue; }
+    if (close && owner) {
+      try { for (const n of Object.keys(parse(buf.join('\n')).mcp_servers || {})) owners.set(n, owner); } catch { /* unparsable fragment: no claim */ }
+      owner = null; buf = [];
+      continue;
+    }
+    if (owner) buf.push(line);
+  }
+  return owners;
+}
+
+// Why a locked table must not be shared with the other agents. Null means it is a plain
+// hand-written table the user put in config.toml, which is exactly the kind of thing eag
+// exists to share.
+export function keepReason(name, obj, owners) {
+  if (owners.has(name)) return `managed by ${owners.get(name)}`;
+  const cmd = typeof obj?.command === 'string' ? obj.command : '';
+  if (/\.app\//.test(cmd)) return 'a macOS app internal (command inside an .app bundle)';
+  if (['node_repl', 'computer-use', 'cua_repl'].includes(name)) return 'a ChatGPT/Codex app internal';
+  if (obj?.enabled === false) return 'disabled in Codex';
+  return null;
+}
+
 export function read(scope, root) {
   const file = configPath(scope, root);
   const text = exists(file) ? fs.readFileSync(file, 'utf8') : '';
@@ -62,13 +96,19 @@ export function read(scope, root) {
   if (block) {
     try { managed = new Set(Object.keys(parse(block).mcp_servers || {})); } catch { managed = new Set(); }
   }
+  const owners = foreignBlocks(text);
   const servers = new Map();
   const locked = new Set();
+  const keep = new Map(); // locked name -> why it must stay Codex's alone
   for (const [name, obj] of Object.entries(all)) {
     servers.set(name, canonical(obj));
-    if (!managed.has(name)) locked.add(name);
+    if (!managed.has(name)) {
+      locked.add(name);
+      const why = keepReason(name, obj, owners);
+      if (why) keep.set(name, why);
+    }
   }
-  return { file, text, exists: exists(file), servers, locked, managed, hasBlock: !!block, damaged, parsed };
+  return { file, text, exists: exists(file), servers, locked, managed, keep, hasBlock: !!block, damaged, parsed };
 }
 
 // Source entry (Claude/.mcp.json shape) -> Codex table. Secrets travel as env

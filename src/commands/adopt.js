@@ -64,7 +64,7 @@ export async function run(args, flags) {
     }
   } else {
     const n = codex.read(scope, root);
-    for (const [name, obj] of n.servers) { const { entry, overrides } = codex.toSource(obj); incoming.set(name, { entry, overrides, locked: n.locked.has(name), native: obj }); }
+    for (const [name, obj] of n.servers) { const { entry, overrides } = codex.toSource(obj); incoming.set(name, { entry, overrides, locked: n.locked.has(name), keep: n.keep.get(name) || null, native: obj }); }
     targetId = `codex-${scope}`;
   }
   if (incoming.size === 0) { console.log(`nothing to adopt: ${agent} has no MCP servers in ${scope} scope`); return 0; }
@@ -76,7 +76,16 @@ export async function run(args, flags) {
   const stateUpdates = {};
   const secretsToSet = [];
   let changed = false;
-  for (const [name, { entry: raw, overrides, locked, native }] of incoming) {
+  for (const [name, { entry: raw, overrides, locked, keep, native }] of incoming) {
+    // A locked table that belongs to another tool, or is a macOS app internal, or is
+    // disabled, is Codex's alone: pushing it into Claude means, on a machine with the ChatGPT
+    // app, registering ChatGPT.app itself as an MCP server. It is not brought into the
+    // source unless the source already has that name from another agent — then the only
+    // job is to keep eag from fighting over it in Codex.
+    if (keep && !Object.hasOwn(servers, name)) {
+      console.log(`${c.dim('keep   ')} ${name} ${c.dim(`is ${keep}; left to Codex, not shared (eag mcp add ${name} … to share it on purpose)`)}`);
+      continue;
+    }
     const { entry, secrets } = extractSecrets(name, raw);
     const errs = validateServer(name, entry);
     if (errs.length) { console.log(`${c.bad('skip   ')} ${name}: ${errs.join('; ')}`); continue; }

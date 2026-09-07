@@ -81,6 +81,11 @@ export async function run(args, flags) {
     if (!Object.hasOwn(src.servers, name)) throw new Error(`${name} not in ${paths.mcp}`);
     const servers = { ...src.servers }; delete servers[name];
     saveMcp(paths, servers, src.mcp);
+    // Its per-agent policy goes with it: a leftover `targets.codex=false` would silently
+    // skip a same-named server added later, or the project's own copy of it.
+    if (src.agents?.servers && Object.hasOwn(src.agents.servers, name)) {
+      const agents = structuredClone(src.agents); delete agents.servers[name]; saveAgents(paths, agents);
+    }
     console.log(`${c.ok('removed')} ${name} from ${paths.mcp}. Run eag apply to remove it from the agents.`);
     return 0;
   }

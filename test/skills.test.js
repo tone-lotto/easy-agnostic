@@ -76,3 +76,20 @@ test('dry run plans everything and moves nothing', () => {
   assert.ok(fs.existsSync(path.join(codex, 'dry', 'SKILL.md')));
   assert.equal(fs.existsSync(path.join(skills.SHARED, 'dry')), false);
 });
+
+// Only what the user added moves. What ships with a tool stays where the tool put it.
+test('tool-native skills are never adopted', () => {
+  reset();
+  mk(codex, '.system', '---\nname: sys\n---\n');                                  // Codex bundled dir
+  mk(codex, 'hatch-pet');                                                        // Codex curated name
+  fs.mkdirSync(path.join(codex, 'vendor_imports'), { recursive: true });
+  fs.mkdirSync(path.join(process.env.CODEX_HOME, 'vendor_imports'), { recursive: true });
+  fs.writeFileSync(path.join(process.env.CODEX_HOME, 'vendor_imports', 'skills-curated-cache.json'), JSON.stringify({ skills: [{ name: 'hatch-pet' }] }));
+  mk(codex, 'mine');                                                             // user-added
+  const eagDir = mk(skills.SHARED, 'eag'); fs.writeFileSync(path.join(eagDir, '.eag-managed'), '');
+  const p = skills.plan();
+  assert.deepEqual(p.map((i) => i.name), ['mine'], 'only the user-added skill is planned');
+  assert.equal(skills.isNative(codex, 'hatch-pet'), true);
+  assert.equal(skills.isNative(codex, '.system'), true);
+  assert.equal(skills.isNative(codex, 'mine'), false);
+});

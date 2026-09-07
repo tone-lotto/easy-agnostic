@@ -13,10 +13,32 @@ export const AGENT_DIRS = {
   codex: { dir: path.join(CODEX_HOME, 'skills'), afterMove: 'none' },           // Codex reads the shared dir directly
 };
 
+// Only what the user ADDED moves. What ships with the tool stays: Codex keeps its bundled
+// skills under ~/.codex/skills/.system and names its curated set in
+// vendor_imports/skills-curated-cache.json; anything eag itself wrote carries a marker.
+function nativeNames() {
+  const out = new Set();
+  const cache = path.join(CODEX_HOME, 'vendor_imports', 'skills-curated-cache.json');
+  try {
+    const walk = (x) => {
+      if (Array.isArray(x)) x.forEach(walk);
+      else if (x && typeof x === 'object') { for (const [k, v] of Object.entries(x)) { if ((k === 'name' || k === 'slug' || k === 'id') && typeof v === 'string') out.add(v); walk(v); } }
+    };
+    walk(JSON.parse(fs.readFileSync(cache, 'utf8')));
+  } catch { /* no cache, nothing curated */ }
+  return out;
+}
+export function isNative(dir, name) {
+  if (name.startsWith('.')) return true;                                    // .system and the like
+  if (exists(path.join(dir, name, '.eag-managed'))) return true;           // eag's own skill
+  if (exists(path.join(dir, name, '.codex-managed')) || exists(path.join(dir, name, '.bundled'))) return true;
+  return nativeNames().has(name);
+}
+
 function realSkills(dir) {
   if (!exists(dir)) return [];
   return fs.readdirSync(dir).filter((n) => {
-    if (n.startsWith('.')) return false;
+    if (isNative(dir, n)) return false;
     const p = path.join(dir, n);
     try { const st = fs.lstatSync(p); return st.isDirectory() && !st.isSymbolicLink() && exists(path.join(p, 'SKILL.md')); } catch { return false; }
   });

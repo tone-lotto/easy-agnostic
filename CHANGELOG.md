@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.1 — 2026-09-07
+
+Found by the first outside tester, on a Mac with the ChatGPT app.
+
+- **Fixed: `adopt codex` pushed Codex-only internals into Claude Code.** A table outside eag's
+  block was "locked", and locked was treated as "share it with the other agents". On a machine
+  with the ChatGPT app that meant registering `cua_repl` (ChatGPT.app itself), `node_repl` and
+  a `computer-use` that Claude rejects by name as MCP servers in Claude Code. A locked table
+  now stays Codex's alone when it belongs to another tool's marker block, points into a macOS
+  `.app` bundle, is one of the ChatGPT/Codex app internals, or is disabled — unless the source
+  already has that name from another agent, in which case eag just keeps out of Codex's way as
+  before. A plain hand-written table is still shared; that is what eag is for.
+- Fixed: `eag mcp rm` now drops the server's per-agent policy from `agents.json` too. A leftover
+  `targets.codex=false` silently skipped a same-named server added later, including a project's
+  own copy of it.
+- `eag adopt skills` never moves what ships with a tool: Codex's `.system` directory and its
+  curated names, anything marked as managed by a tool. Only skills the user added move.
+
 ## 0.6.0 — 2026-09-07
 
 - **Skills flow both ways.** `eag adopt skills` moves a skill that only one agent has — under

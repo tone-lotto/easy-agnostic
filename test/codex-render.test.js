@@ -265,3 +265,34 @@ test('toSource keeps a Codex table eag never rendered readable as a source entry
     overrides: { enabled: true },
   });
 });
+
+// A locked table is not always something to share. On a machine with the ChatGPT app,
+// Codex's config carries the app's own internals — one of them is ChatGPT.app itself — and
+// adopting those into the source pushed them into Claude Code as MCP servers.
+test('keepReason tells a hand-written table from one that must stay Codex\'s alone', () => {
+  const owners = new Map([['simbos', 'simbos']]);
+  assert.equal(codex.keepReason('mine', { url: 'https://x' }, owners), null, 'a plain hand-written table is meant to be shared');
+  assert.match(codex.keepReason('simbos', { url: 'https://s' }, owners), /managed by simbos/);
+  assert.match(codex.keepReason('cua_repl', { command: '/Applications/ChatGPT.app/Contents/MacOS/ChatGPT' }, owners), /app/);
+  assert.match(codex.keepReason('thing', { command: './Codex Computer Use.app/Contents/MacOS/x' }, owners), /\.app bundle/);
+  assert.match(codex.keepReason('node_repl', { command: 'node' }, owners), /app internal/);
+  assert.match(codex.keepReason('off', { url: 'https://o', enabled: false }, owners), /disabled/);
+});
+
+test('read() reports which locked tables belong to another tool\'s block', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const root = path.join(process.env.EAG_PROJECT, 'keep-test');
+  const file = codex.configPath('project', root);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, [
+    '[mcp_servers.handwritten]', 'url = "https://h"', '',
+    '# >>> othertool managed (do not edit) >>>', '[mcp_servers.theirs]', 'url = "https://t"', '# <<< othertool managed <<<', '',
+    '[mcp_servers.appthing]', 'command = "/Applications/Some.app/Contents/MacOS/x"', '',
+  ].join('\n'));
+  const r = codex.read('project', root);
+  assert.deepEqual([...r.locked].sort(), ['appthing', 'handwritten', 'theirs']);
+  assert.equal(r.keep.has('handwritten'), false, 'hand-written: share it');
+  assert.match(r.keep.get('theirs'), /managed by othertool/);
+  assert.match(r.keep.get('appthing'), /\.app/);
+});
