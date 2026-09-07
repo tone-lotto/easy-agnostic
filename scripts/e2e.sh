@@ -61,7 +61,7 @@ export EAG_SHELL_RC="$S/shellrc"   # doctor checks the `eval "$(eag env)"` line 
 export EAG_NO_UPDATE=1             # apply checks the registry once a day; this run must stay offline
 BIN="$REPO/bin/eag.js"
 A() { node "$BIN" "$@"; }
-mode() { stat -f %Lp "$1" 2>/dev/null || stat -c %a "$1"; }
+mode() { node -e 'console.log((require("fs").statSync(process.argv[1]).mode & 0o777).toString(8))' "$1"; }
 
 # Remove every eag-test secret adopt stored (index lives in the sandbox) and say so if any survived.
 remove_secrets() {
