@@ -377,3 +377,33 @@ test('doctor dedupes an identical Codex skill copy and flags a different one', a
   assert.equal(fs.readFileSync(path.join(codexSkills, 'clash', 'SKILL.md'), 'utf8'), '---\nname: clash\n---\nB\n', 'a different skill is never touched, even with --fix');
   assert.equal(code, 0, 'a collision is a warning, not a problem: doctor still exits 0');
 });
+
+// 0.6.0 adopted Codex's app internals into the source and pushed them into Claude Code.
+// 0.6.1 stopped that for new ones; this takes back the ones already there, so a second
+// `setup` repairs a machine the first one damaged.
+test('adopt codex undoes an app-internal it adopted by mistake, and leaves a user entry alone', async () => {
+  const { run: adopt } = await import('../src/commands/adopt.js');
+  const codex = await import('../src/adapters/codex.js');
+  const { loadSource } = await import('../src/source.js');
+  const { scopePaths } = await import('../src/paths.js');
+  const toml = codex.configPath('user');
+  fs.mkdirSync(path.dirname(toml), { recursive: true });
+  fs.writeFileSync(toml, [
+    '[mcp_servers.cua_repl]', 'command = "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT"', 'enabled = false', '',
+    '[mcp_servers.mine]', 'url = "https://mine"', '',
+  ].join('\n'));
+  // the source as 0.6.0 left it: the app internal adopted, plus a user entry that happens to
+  // share a name with a hand-written Codex table
+  const leaked = codex.toSource(codex.read('user').servers.get('cua_repl')).entry;
+  fs.writeFileSync(path.join(process.env.EAG_HOME, 'mcp.json'), JSON.stringify({ mcpServers: { cua_repl: leaked, mine: { type: 'http', url: 'https://mine-from-claude' } } }));
+  fs.writeFileSync(path.join(process.env.EAG_HOME, 'agents.json'), JSON.stringify({ targets: { claude: true, codex: true }, servers: { cua_repl: { targets: { codex: false } } } }));
+  const lines = []; const orig = console.log; console.log = (...a) => lines.push(a.join(' '));
+  try { await adopt(['codex'], { scope: 'user' }); } finally { console.log = orig; }
+  const text = lines.join('\n').replace(/\x1b\[[0-9;]*m/g, '');
+  assert.match(text, /undo\s+cua_repl/);
+  const src = loadSource(scopePaths('user'));
+  assert.equal('cua_repl' in src.servers, false, 'the leaked internal is gone from the source');
+  assert.equal(src.agents.servers.cua_repl, undefined, 'and its policy with it');
+  assert.equal(src.servers.mine.url, 'https://mine-from-claude', 'a user entry with different content is kept');
+  assert.equal(src.agents.servers.mine?.targets?.codex, false, 'and eag just keeps out of Codex\'s way for it');
+});

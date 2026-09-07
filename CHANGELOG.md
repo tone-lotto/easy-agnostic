@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.7.2 — 2026-09-07
+
+From the first outside tester's second run.
+
+- **A second `setup` repairs what 0.6.0 did.** 0.6.1 stopped `adopt codex` from bringing Codex's app
+  internals into the source, but the ones an earlier run had already adopted stayed there — and kept
+  being pushed into Claude Code (`cua_repl`, `node_repl`, `meta-ads`) or failing on every apply
+  (`computer-use`, a name Claude reserves). When the source holds one of those byte for byte as Codex
+  has it, adopt now takes it back out and the next apply removes it from the agents. A source entry
+  with different content is the user's and is left alone, as before.
+- `doctor` no longer calls it a problem that `setup` itself ran from the npx cache when the global
+  install it just made is in place.
+- `doctor` run from `$HOME` listed every skill twice (the "project" `.agents/skills` there is the user's
+  own directory).
+- The "secrets not exported in this shell" warning now says the useful thing when the shell file was
+  installed moments ago: open a new terminal.
+
 ## 0.7.1 — 2026-09-07
 
 - **The background update works from a desktop-app launch.** It ran `npm` by PATH, and a hook

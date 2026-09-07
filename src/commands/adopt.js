@@ -87,6 +87,17 @@ export async function run(args, flags) {
       continue;
     }
     const { entry, secrets } = extractSecrets(name, raw);
+    // The same thing already IN the source, byte for byte: it got there from Codex — an older
+    // eag adopted it before it knew better — not from the user. Take it back out, so the next
+    // apply removes it from the other agents too. A source entry with different content is
+    // the user's (or another agent's) and stays; eag only keeps out of Codex's way for it.
+    if (keep && Object.hasOwn(servers, name) && deepEqual(servers[name], entry)) {
+      delete servers[name];
+      if (agents.servers[name]) delete agents.servers[name];
+      changed = true;
+      console.log(`${c.ok('undo   ')} ${name} ${c.dim(`is ${keep}; it was adopted by mistake — removed from the source, eag apply removes it from the agents`)}`);
+      continue;
+    }
     const errs = validateServer(name, entry);
     if (errs.length) { console.log(`${c.bad('skip   ')} ${name}: ${errs.join('; ')}`); continue; }
     const existing = Object.hasOwn(servers, name) ? servers[name] : undefined;

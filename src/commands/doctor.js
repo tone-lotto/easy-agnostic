@@ -123,8 +123,11 @@ async function checks(fix, root, out) {
   // cache is evictable and never on PATH, so hooks pin a path that disappears and the shell
   // file finds no `eag` at all.
   const kind = installKind();
-  if (kind === 'npx') out.push({ level: 'bad', msg: `eag ${VERSION} runs from the npx cache: evictable, never on PATH, never updated. Run: npm i -g easy-agnostic` });
-  else if (kind === 'global' && !onPath('eag')) out.push({ level: 'warn', msg: `eag is installed globally but ${globalBinDir() || 'its bin dir'} is not on PATH in this shell; the generated shell file adds it` });
+  const gbin = globalBinDir();
+  const globalPresent = !!gbin && exists(path.join(gbin, 'eag'));
+  if (kind === 'npx' && globalPresent) out.push({ level: 'ok', msg: `eag ${VERSION} installed globally (${gbin}); this run came from npx, the hooks use the global one` });
+  else if (kind === 'npx') out.push({ level: 'bad', msg: `eag ${VERSION} runs from the npx cache: evictable, never on PATH, never updated. Run: npm i -g easy-agnostic` });
+  else if (kind === 'global' && !onPath('eag')) out.push({ level: 'warn', msg: `eag is installed globally but ${gbin || 'its bin dir'} is not on PATH in this shell; the generated shell file adds it` });
   else out.push({ level: 'ok', msg: `eag ${VERSION} (${kind === 'dev' ? 'linked checkout' : 'global install'})` });
 
   // Sync-on-launch, and the ${VAR} exports it carries. Either the generated file is wired
@@ -168,13 +171,17 @@ async function checks(fix, root, out) {
   if (cl.installed && (managed?.allowManagedHooksOnly || managed?.strictPluginOnlyCustomization)) {
     out.push({ level: 'warn', msg: `managed settings restrict hooks (${managed.allowManagedHooksOnly ? 'allowManagedHooksOnly' : 'strictPluginOnlyCustomization'}); the SessionStart hook may not run` });
   }
-  if (notExported.length) out.push({ level: 'warn', msg: `${notExported.join(', ')} resolve from the ${backendName()} store but are not exported in this shell; the agents expand \${NAME} from their own environment, so run  eval "$(eag env)"  and restart them` });
+  if (notExported.length) out.push({ level: 'warn', msg: rcSt.linked
+    ? `${notExported.join(', ')} are not exported in THIS shell yet (the shell file was installed after it started). Open a new terminal, or run: . ${shell.INIT_FILE}`
+    : `${notExported.join(', ')} resolve from the ${backendName()} store but are not exported in this shell; the agents expand \${NAME} from their own environment, so run  eval "$(eag env)"  and restart them` });
 
   // claude
   out.push(claude.available() ? { level: 'ok', msg: 'claude CLI available' } : { level: 'warn', msg: 'claude CLI not on PATH; user-scope apply needs it' });
   linkSkills(path.join(EAG_HOME, 'skills'), path.join(CLAUDE_CONFIG_DIR, 'skills'), fix, out);
   dedupeSkills(path.join(EAG_HOME, 'skills'), path.join(CODEX_HOME, 'skills'), fix, out, 'Codex');
-  if (exists(path.join(root, '.agents', 'skills'))) linkSkills(path.join(root, '.agents', 'skills'), path.join(root, '.claude', 'skills'), fix, out);
+  // From $HOME the "project" .agents/skills IS the user's shared dir: linking it again from
+  // there reported every skill twice.
+  if (!scopePaths('project', root).collides && exists(path.join(root, '.agents', 'skills'))) linkSkills(path.join(root, '.agents', 'skills'), path.join(root, '.claude', 'skills'), fix, out);
   const agentsMd = path.join(root, 'AGENTS.md');
   const claudeMd = path.join(root, 'CLAUDE.md');
   if (exists(agentsMd)) {
