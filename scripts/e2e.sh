@@ -267,6 +267,47 @@ A mcp rm e2e-touch
 apply_s --scope user --target codex
 grep -q '\[mcp_servers.e2e-orphan\]' "$CODEX_HOME/config.toml" || { echo "FAIL: the orphan entry did not survive the second write either" >&2; exit 1; }
 
+# --- sync on launch: `eag hook` -------------------------------------------------------
+# The generated shell file has to be valid POSIX sh, wire the rc idempotently, and define a
+# wrapper that syncs BEFORE handing control to the real binary. A fake `codex` first on PATH
+# stands in for the real one so the run never actually starts an agent.
+SHELLTEST="$S/shelltest"; mkdir -p "$SHELLTEST/bin"
+printf '#!/bin/sh\nprintf "REAL codex ran\\n"\n' > "$SHELLTEST/bin/codex"; chmod +x "$SHELLTEST/bin/codex"
+(
+  export PATH="$SHELLTEST/bin:$PATH"
+  A hook install > "$S/hook-install.txt"
+  grep -q 'shell-init.sh' "$S/shellrc" || { echo "FAIL: hook install did not wire $S/shellrc" >&2; exit 1; }
+  sh -n "$EAG_HOME/shell-init.sh" || { echo "FAIL: the generated shell file is not valid POSIX sh" >&2; exit 1; }
+  grep -q 'codex() { __eag_sync; command codex "$@"; }' "$EAG_HOME/shell-init.sh" || { echo "FAIL: no codex wrapper in the generated file" >&2; exit 1; }
+  grep -q 'export [A-Z_]*=' "$EAG_HOME/shell-init.sh" && { echo "FAIL: the generated file carries a literal export; secrets must stay in the store" >&2; exit 1; }
+  before="$(wc -c < "$S/shellrc")"; A hook install >/dev/null; after="$(wc -c < "$S/shellrc")"
+  [ "$before" = "$after" ] || { echo "FAIL: hook install is not idempotent ($before -> $after bytes)" >&2; exit 1; }
+
+  # A server added now must reach Codex because the wrapper synced, not because we applied.
+  A mcp add e2e-wrapped --url https://example.com/wrapped >/dev/null
+  out="$(sh -c ". \"$EAG_HOME/shell-init.sh\"; codex" 2>&1)" || true
+  echo "$out" | grep -q 'REAL codex ran' || { echo "FAIL: the wrapper did not hand over to the real binary:" >&2; echo "$out" >&2; exit 1; }
+  grep -q '\[mcp_servers.e2e-wrapped\]' "$CODEX_HOME/config.toml" || { echo "FAIL: the wrapper did not sync before launching" >&2; exit 1; }
+
+  # Nothing left to do: the wrapper must be completely silent apart from the agent itself.
+  out="$(sh -c ". \"$EAG_HOME/shell-init.sh\"; codex" 2>&1)" || true
+  [ "$out" = "REAL codex ran" ] || { echo "FAIL: a no-op sync printed something:" >&2; printf '%s\n' "$out" >&2; exit 1; }
+
+  # A NEW problem must break that silence on the very next launch, and then go quiet again.
+  node -e 'const fs=require("fs"),f=process.argv[1];fs.writeFileSync(f,fs.readFileSync(f,"utf8").replace("https://example.com/wrapped","https://example.com/hand-edited"))' "$CODEX_HOME/config.toml"
+  out="$(sh -c ". \"$EAG_HOME/shell-init.sh\"; codex" 2>&1)" || true
+  echo "$out" | grep -q 'conflict(s) left untouched' || { echo "FAIL: a new conflict did not break the quiet-mode silence:" >&2; printf '%s\n' "$out" >&2; exit 1; }
+  out="$(sh -c ". \"$EAG_HOME/shell-init.sh\"; codex" 2>&1)" || true
+  [ "$out" = "REAL codex ran" ] || { echo "FAIL: the same conflict was reported twice; quiet mode must report a problem once:" >&2; printf '%s\n' "$out" >&2; exit 1; }
+
+  A apply --scope user --target codex --prefer source >/dev/null 2>&1 || true
+  A mcp rm e2e-wrapped >/dev/null
+  A apply --scope user --target codex >/dev/null 2>&1 || true
+)
+A hook uninstall >/dev/null
+grep -q 'easy-agnostic' "$S/shellrc" && { echo "FAIL: hook uninstall left its block in $S/shellrc" >&2; exit 1; }
+[ -f "$EAG_HOME/shell-init.sh" ] && { echo "FAIL: hook uninstall left the generated file behind" >&2; exit 1; }
+
 # `eag setup` = init + adopt claude + adopt codex + apply + doctor --fix in one call. Prove
 # it converges from scratch, in its own disposable sub-sandbox with a minimal fixture (not
 # a copy of the real configs): a server that starts out known only to Claude must reach
@@ -280,15 +321,18 @@ printf '[mcp_servers.setup-codex-demo]\nurl = "https://example.com/setup-codex-d
 (
   cd "$SETUP_S/proj"
   export EAG_HOME="$SETUP_S/agents" CLAUDE_CONFIG_DIR="$SETUP_S/cc" CODEX_HOME="$SETUP_S/codex" PI_CODING_AGENT_DIR="$SETUP_S/pi" EAG_SECRET_SERVICE=eag-test
+  export EAG_SHELL_RC="$SETUP_S/shellrc"; : > "$EAG_SHELL_RC"
   set +e; out="$(A setup)"; rc=$?; set -e
   echo "$out"
   [ "$rc" = 0 ] || { echo "FAIL: eag setup exited $rc on a clean fixture with nothing that should fail" >&2; exit 1; }
-  for stage in '1/5 init' '2/5 adopt claude' '3/5 adopt codex' '4/5 apply' '5/5 doctor'; do
+  for stage in '1/6 init' '2/6 adopt claude' '3/6 adopt codex' '4/6 apply' '5/6 hook install' '6/6 doctor'; do
     echo "$out" | grep -q "$stage" || { echo "FAIL: eag setup did not run stage: $stage" >&2; exit 1; }
   done
   [ -f "$SETUP_S/agents/mcp.json" ] || { echo "FAIL: eag setup did not create the source" >&2; exit 1; }
   grep -q 'setup-codex-demo' "$SETUP_S/cc/.claude.json" || { echo "FAIL: eag setup did not sync the codex-only server to Claude" >&2; exit 1; }
   grep -q 'setup-demo' "$SETUP_S/codex/config.toml" || { echo "FAIL: eag setup did not sync the claude-only server to Codex" >&2; exit 1; }
+  grep -q 'shell-init.sh' "$SETUP_S/shellrc" || { echo "FAIL: eag setup did not wire the shell for sync-on-launch" >&2; exit 1; }
+  sh -n "$SETUP_S/agents/shell-init.sh" || { echo "FAIL: the shell file eag setup generated is not valid POSIX sh" >&2; exit 1; }
 )
 rm -rf "$SETUP_S"
 

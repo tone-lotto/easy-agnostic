@@ -15,8 +15,13 @@ Usage: eag <command> [options]
                                         import what an agent has today into the source
   status [--scope user|project|all] [--exit-code] [--quiet]
                                         show drift between source, last apply and each agent
-  apply [--scope user|project|all] [--target claude,codex] [--dry-run] [--prefer source|native]
+  apply [--scope user|project|all] [--target claude,codex] [--dry-run] [--prefer source|native] [--quiet]
                                         write the source into each agent (3-way merge, never clobbers)
+  hook install | status | uninstall [--dry-run]
+                                        sync on launch: a generated ~/.agents/shell-init.sh, sourced from your
+                                        shell rc, exports the \${NAME} values and syncs each agent just before
+                                        it starts. Covers terminal launches; an agent opened from a desktop app
+                                        or an IDE does not read your rc and syncs on the next terminal launch.
   mcp ls | add <name> ... | rm <name> | target <name> <agent> on|off
                                         edit the source without opening an editor
   secret set <NAME> [--value V | --from-env] | ls | rm <NAME>
@@ -55,7 +60,8 @@ const COMMAND_FLAGS = {
   init: ['project'],
   adopt: ['scope', 'dry-run', 'force'],
   status: ['scope', 'exit-code', 'quiet'],
-  apply: ['scope', 'target', 'dry-run', 'prefer'],
+  apply: ['scope', 'target', 'dry-run', 'prefer', 'quiet'],
+  hook: ['dry-run'],
   mcp: ['scope', 'url', 'header', 'command', 'args', 'env', 'cwd', 'type', 'force'],
   secret: ['value', 'from-env'],
   env: [],
@@ -73,6 +79,7 @@ export async function main(argv) {
     adopt: () => import('./commands/adopt.js'),
     status: () => import('./commands/status.js'),
     apply: () => import('./commands/apply.js'),
+    hook: () => import('./commands/hook.js'),
     mcp: () => import('./commands/mcp.js'),
     secret: () => import('./commands/secret.js'),
     env: () => import('./commands/env.js'),

@@ -32,12 +32,13 @@ src/paths.js            all paths; honours EAG_HOME, CLAUDE_CONFIG_DIR, CODEX_HO
 src/source.js           load/save mcp.json + agents.json, validation, per-server policy helpers
 src/secrets.js          keychain (macOS `security`), secret-tool (Linux), .secrets.env fallback
 src/state.js            last-apply snapshot per target (.state/<target>.json)
+src/shell.js            generated ~/.agents/shell-init.sh + rc wiring for sync-on-launch
 src/merge.js            the 3-way merge; pure function, no I/O
 src/plan.js             builds a plan per target, applies it; TARGETS registry
 src/adapters/codex.js   read/render/write managed block in config.toml; toSource for adopt
 src/adapters/claude.js  read ~/.claude.json, write via `claude mcp add-json|remove`
 src/adapters/pi.js      read-only checks (pi-mcp-adapter reads the source directly)
-src/commands/*.js       setup (init+adopt+apply+doctor --fix in one), init, adopt, status, apply, mcp, secret, env, doctor
+src/commands/*.js       setup (init+adopt+apply+hook+doctor --fix in one), init, adopt, status, apply, hook, mcp, secret, env, doctor
 scripts/e2e.sh          sandbox end-to-end run from copies of the real configs
 test/*.test.js          unit tests (node --test); test/helpers.js holds the sandbox harness
 ```
@@ -77,6 +78,18 @@ It builds a sandbox from copies of `~/.codex/config.toml` and of the `mcpServers
 
 Scenarios v0 handles and must keep working, all automated by the script: adopt with secret extraction (happens when your real configs hold literals; a reference the sandbox cannot resolve gets a placeholder so the run tests the write paths, not your keychain); locked entry in Codex left alone; an unknown flag refused instead of ignored; a source without `mcpServers` refused instead of read as empty; a damaged managed block refusing the write; a block entry absent from `.state` surviving an unrelated write; apply, idempotent apply, redacted dry-run; a missing secret blocks the Claude write (always resolves) but not the Codex one when the reference can stay a native env-var pointer; `mcp rm` propagates deletes to every target; a hand edit in the managed block detected as a conflict and resolved with `--prefer native` then `--prefer source`; project apply generating `.codex/config.toml` and extending `.gitignore` idempotently; file modes including the re-tightening of a widened file. A write failure for one entry (a name the agent's own CLI refuses, say) is reported and skipped, never fatal to the rest of the run — the script's own adopted-from-real-config entries exercise this on a machine that has one.
 
+## Staying in sync
+
+`eag apply` is a one-shot write, so an agent already running keeps the config it started with. `eag hook install` (also run by `eag setup`) generates `~/.agents/shell-init.sh` and sources it from the shell rc: it evaluates `eag env` and defines one wrapper per agent binary that runs `eag apply --quiet` before handing over with `command <bin> "$@"`.
+
+Rules that make it survivable:
+- **Only what is installed gets wrapped.** A function named after a missing binary would make `command -v codex` succeed for a Codex that is not there. `src/shell.js` scans PATH; every `eag apply` regenerates the file, so an agent installed later is picked up without the user touching their rc again.
+- **Pi is never wrapped** — it reads the source itself, so it cannot be stale.
+- **No secret is written into the generated file.** It runs `eval "$(command eag env)"` at shell start; the values stay in the secret store.
+- **Everything is guarded on `command -v eag`**, so uninstalling the package cannot break a shell.
+- **`--quiet` reports a problem once.** It runs on every agent launch, so a chronic problem (an entry `claude mcp add-json` refuses, an unresolved conflict) would otherwise print the same line forever. `apply.js` keeps the last reported set in `.state/quiet.json` and prints only when it changes.
+- **The shell only covers terminal launches.** A GUI or IDE launch reads neither the rc nor the exported variables; that is also why `claude.secrets` defaults to `literal`. Native hooks for that path are phase 1.
+
 ## Conventions
 
 - Node >= 20, ESM, no build step, single dependency (`smol-toml`). Do not add a framework or a TypeScript toolchain for v0.
@@ -89,7 +102,7 @@ Scenarios v0 handles and must keep working, all automated by the script: adopt w
 ## Roadmap
 
 - Phase 0 (done, and run for real on the maintainer's machine): Claude + Codex + Pi, user and project scope, unit tests, secrets by reference everywhere.
-- Phase 1: Cursor adapter, `doctor --fix` coverage, SessionStart hooks that run `eag apply --quiet` for the other agents (nothing supports `--quiet` yet outside `status`), adopt extracting credentials embedded in URLs, a hermetic e2e with versioned fixtures so a contributor without the real configs can run it.
+- Phase 1: Cursor adapter, `doctor --fix` coverage, native SessionStart hooks for the GUI/IDE launch path the shell cannot reach (Codex has a full lifecycle hook system; Claude Code takes one in settings.json), fish support in `src/shell.js`, adopt extracting credentials embedded in URLs, a hermetic e2e with versioned fixtures so a contributor without the real configs can run it.
 - Phase 2: `eag run <server>` stdio wrapper: inject secrets into the server process and do OAuth once with a shared token store (embed mcp-remote).
 - Phase 3: Gemini/Antigravity and OpenCode adapters, Claude permissions to Codex execpolicy rules (opt-in), `eag pack` exporting the source as an Agent Plugins 1.0 plugin.
 

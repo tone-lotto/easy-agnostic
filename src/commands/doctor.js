@@ -8,6 +8,7 @@ import { loadSource } from '../source.js';
 import { exists, refsIn, looksLikeSecret, mapStrings, writeFileAtomic, backup, c } from '../util.js';
 import { resolveSecret, backendName } from '../secrets.js';
 import * as pi from '../adapters/pi.js';
+import * as shell from '../shell.js';
 import * as claude from '../adapters/claude.js';
 
 const MARK = { ok: c.ok('✓'), warn: c.warn('!'), bad: c.bad('✗'), info: c.dim('·'), fixed: c.ok('✓ fixed') };
@@ -79,7 +80,20 @@ async function checks(fix, root, out) {
   // shell wiring for ${VAR}
   const rc = process.env.EAG_SHELL_RC || path.join(os.homedir(), process.env.SHELL?.endsWith('zsh') ? '.zshrc' : '.bashrc');
   const rcText = exists(rc) ? fs.readFileSync(rc, 'utf8') : '';
-  out.push(/eag env/.test(rcText) ? { level: 'ok', msg: `shell: ${path.basename(rc)} evaluates eag env` } : { level: 'warn', msg: `shell: add  eval "$(eag env)"  to ${rc} so \${VAR} references resolve in the agents` });
+  // Sync-on-launch, and the ${VAR} exports it carries. Either the generated file is wired
+  // up, or the older bare `eval "$(eag env)"` line is there and at least the exports work.
+  const rcSt = shell.rcState(rc);
+  if (rcSt.linked) {
+    const bins = shell.wrappableBins();
+    const current = exists(shell.INIT_FILE) && fs.readFileSync(shell.INIT_FILE, 'utf8') === shell.render(bins);
+    out.push(current
+      ? { level: 'ok', msg: `shell: ${path.basename(rc)} syncs on launch${bins.length ? ` (${bins.join(', ')})` : ''}` }
+      : { level: 'warn', msg: `shell: ${shell.INIT_FILE} is out of date. Run: eag hook install` });
+  } else if (rcSt.legacyEnvLine) {
+    out.push({ level: 'warn', msg: `shell: ${path.basename(rc)} exports the secrets but does not sync on launch. Run: eag hook install` });
+  } else {
+    out.push({ level: 'warn', msg: `shell: ${rc} neither exports \${NAME} values nor syncs on launch. Run: eag hook install` });
+  }
   if (notExported.length) out.push({ level: 'warn', msg: `${notExported.join(', ')} resolve from the ${backendName()} store but are not exported in this shell; the agents expand \${NAME} from their own environment, so run  eval "$(eag env)"  and restart them` });
 
   // claude
