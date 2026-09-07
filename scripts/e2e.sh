@@ -184,11 +184,32 @@ apply_u
 # the snapshot has to record the native entry, not the source one it just chose against.
 node -e 'const fs=require("fs"),f=process.argv[1];fs.writeFileSync(f,fs.readFileSync(f,"utf8").replace("https://example.com/lit","https://example.com/edited-by-hand"))' "$CODEX_HOME/config.toml"
 if A status --scope user --exit-code >/dev/null; then echo "FAIL: a hand edit in the managed block was not reported as drift" >&2; exit 1; fi
+# A conflict is its own exit code now, so a script can tell "apply it" from "ask a human".
+set +e; A status --scope user --exit-code >/dev/null 2>&1; rc=$?; set -e
+[ "$rc" = 3 ] || { echo "FAIL: a conflict should exit 3 from status --exit-code, got $rc" >&2; exit 1; }
+set +e; A apply --scope user --target codex >/dev/null 2>&1; rc=$?; set -e
+[ "$rc" = 3 ] || { echo "FAIL: a conflict should exit 3 from apply, got $rc" >&2; exit 1; }
+# --json is real JSON, carries both sides of the conflict, and never a resolved secret.
+A status --scope user --json > "$S/status.json"
+node -e '
+const j = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+const t = j.targets.find((x) => x.target === "codex-user");
+const c = t.actions.find((a) => a.op === "conflict");
+if (!c) { console.error("FAIL: --json has no conflict action"); process.exit(1); }
+if (!c.source || !c.native) { console.error("FAIL: --json conflict lacks source/native"); process.exit(1); }
+if (j.exit !== 3) { console.error(`FAIL: --json exit should be 3, got ${j.exit}`); process.exit(1); }
+' "$S/status.json"
+grep -q "$E2E_VALUE" "$S/status.json" && { echo "FAIL: --json output contains a resolved secret" >&2; exit 1; }
+# --prefer native keeps the edit AND writes it back into the source, so it stays kept.
 apply_s --prefer native
 grep -q 'edited-by-hand' "$CODEX_HOME/config.toml" || { echo "FAIL: --prefer native overwrote the hand edit" >&2; exit 1; }
-grep -q 'edited-by-hand' "$EAG_HOME/.state/codex-user.json" || { echo "FAIL: --prefer native did not record the native entry in the snapshot" >&2; exit 1; }
-apply_s --prefer source   # put the source version back for the rest of the run
-grep -q 'edited-by-hand' "$CODEX_HOME/config.toml" && { echo "FAIL: --prefer source did not restore the source entry" >&2; exit 1; }
+grep -q 'edited-by-hand' "$EAG_HOME/mcp.json" || { echo "FAIL: --prefer native did not write the native entry back into the source" >&2; exit 1; }
+apply_s   # a plain apply afterwards must NOT undo the choice (it used to)
+grep -q 'edited-by-hand' "$CODEX_HOME/config.toml" || { echo "FAIL: the apply after --prefer native reverted the kept edit" >&2; exit 1; }
+# put the original back through the source, the way a user would
+A mcp add e2e-lit --url https://example.com/lit --header 'X-Api-Key: v1-${E2E_LIT_TOKEN}' --force >/dev/null
+apply_s
+grep -q 'edited-by-hand' "$CODEX_HOME/config.toml" && { echo "FAIL: editing the source did not propagate" >&2; exit 1; }
 
 # Nothing left to write, but the block still carries a literal: a file widened since the
 # last apply must be tightened again rather than silently left world-readable.
@@ -238,6 +259,17 @@ const fs = require("fs"), d = JSON.parse(fs.readFileSync(process.argv[1], "utf8"
 const left = Object.keys(d.mcpServers || {}).filter((n) => n === "e2e-demo" || n === "e2e-missing");
 if (left.length) { console.error(`FAIL: mcp rm did not remove ${left.join(", ")} from .claude.json`); process.exit(1); }
 ' "$S/cc/.claude.json"
+
+# --args with spaces and no comma used to be stored as ONE argument and the server never
+# started. It is refused; --arg is the per-argument form.
+set +e; A mcp add e2e-badargs --command npx --args '-y some-server /tmp' >"$S/badargs.txt" 2>&1; rc=$?; set -e
+[ "$rc" != 0 ] || { echo "FAIL: --args with spaces and no comma was accepted" >&2; exit 1; }
+grep -q 'comma-separated' "$S/badargs.txt" || { echo "FAIL: the --args refusal does not explain the format" >&2; cat "$S/badargs.txt" >&2; exit 1; }
+A mcp add e2e-goodargs --command npx --arg -y --arg some-server >/dev/null
+node -e 'const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).mcpServers["e2e-goodargs"]; if (JSON.stringify(s.args)!==JSON.stringify(["-y","some-server"])) { console.error("FAIL: --arg did not produce the expected args:", JSON.stringify(s.args)); process.exit(1); }' "$EAG_HOME/mcp.json"
+A mcp rm e2e-goodargs >/dev/null
+# per-command help, so flags are discoverable without provoking an error
+A mcp --help | grep -q -- '--arg <A>' || { echo "FAIL: eag mcp --help does not document --arg" >&2; exit 1; }
 
 # --- regressions fixed after the first sandbox run ------------------------------------
 
@@ -352,6 +384,8 @@ printf '#!/bin/sh\nprintf "REAL codex ran\\n"\n' > "$SHELLTEST/bin/codex"; chmod
 printf '{\n  "model": "opus",\n  "hooks": { "Stop": [ { "hooks": [ { "type": "command", "command": "echo theirs" } ] } ] }\n}\n' > "$CLAUDE_CONFIG_DIR/settings.json"
 A hook install >/dev/null
 [ -x "$EAG_HOME/bin/eag-sync" ] || { echo "FAIL: hook install did not create an executable launcher" >&2; exit 1; }
+[ -f "$EAG_HOME/skills/eag/SKILL.md" ] && [ -f "$EAG_HOME/skills/eag/.eag-managed" ] || { echo "FAIL: hook install did not put eag's own skill into $EAG_HOME/skills" >&2; exit 1; }
+[ -L "$EAG_HOME/skills/eag" ] && { echo "FAIL: the eag skill must be a copy, not a link into the package" >&2; exit 1; }
 # Codex takes its user hooks from $CODEX_HOME/hooks.json, discovered with no pointer in
 # config.toml — which eag must not touch for this, since that file is its managed-block target.
 cp "$CODEX_HOME/config.toml" "$S/config.before-hook.toml"

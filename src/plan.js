@@ -59,7 +59,7 @@ export function buildPlan(targetId, { root, prefer = null, warn = () => {} } = {
     try {
       desired.set(name, t.agent === 'codex'
         ? codex.render(name, src, serverOverrides(agents, name, 'codex'), warn)
-        : claude.render(name, src, { secrets: secretsMode(agents, name, 'claude', 'literal') }));
+        : claude.render(name, src, { secrets: secretsMode(agents, name, 'claude', 'literal'), warn }));
     } catch (e) { errors.push(e.message); }
   }
   const stateDir = t.scope === 'user' ? user.paths.state : proj.paths.state;

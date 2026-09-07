@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { parse } from 'smol-toml';
 import { scopePaths, projectRoot, EAG_HOME, CLAUDE_CONFIG_DIR, CODEX_HOME } from '../paths.js';
 import { loadSource } from '../source.js';
-import { exists, readJson, refsIn, looksLikeSecret, mapStrings, writeFileAtomic, backup, c } from '../util.js';
+import { exists, readJson, refsIn, looksLikeSecret, mapStrings, writeFileAtomic, backup, sameTree, c } from '../util.js';
 import { resolveSecret, backendName } from '../secrets.js';
 import * as pi from '../adapters/pi.js';
 import * as shell from '../shell.js';
@@ -34,9 +34,40 @@ function linkSkills(srcDir, dstDir, fix, out) {
         if (target === fs.realpathSync(src)) out.push({ level: 'ok', msg: `skill ${name} linked into ${dstDir}` });
         else if (target === null) { if (fix) { fs.unlinkSync(dst); fs.symlinkSync(path.relative(dstDir, src), dst); out.push({ level: 'fixed', msg: `skill ${name}: replaced broken symlink` }); } else out.push({ level: 'warn', msg: `skill ${name}: broken symlink at ${dst} (--fix replaces it)` }); }
         else out.push({ level: 'info', msg: `skill ${name}: ${dst} links elsewhere (${target}); left alone` });
-      } else out.push({ level: 'info', msg: `skill ${name}: real directory at ${dst} shadows ${src}; left alone` });
+      } else if (sameTree(src, dst)) {
+        // The same skill, copied. Nothing is lost by replacing the copy with a link, and
+        // then editing the source reaches every agent instead of one.
+        if (fix) { fs.rmSync(dst, { recursive: true, force: true }); fs.symlinkSync(path.relative(dstDir, src), dst); out.push({ level: 'fixed', msg: `skill ${name}: replaced an identical copy at ${dst} with a link` }); }
+        else out.push({ level: 'info', msg: `skill ${name}: ${dst} is an identical copy of ${src} (--fix replaces it with a link)` });
+      } else {
+        // Two different skills with one name: each agent sees a different one, and eag
+        // cannot pick. Loud, because the summary counts warnings and this used to be silent.
+        out.push({ level: 'warn', msg: `skill ${name}: ${dst} is a DIFFERENT skill with the same name as ${src}. Each agent sees a different one; eag will not choose. Rename one, or delete the copy to use the shared one` });
+      }
     } else if (fix) { fs.mkdirSync(dstDir, { recursive: true }); fs.symlinkSync(path.relative(dstDir, src), dst); out.push({ level: 'fixed', msg: `skill ${name}: linked ${dst} → ${src}` }); }
     else out.push({ level: 'warn', msg: `skill ${name} in ${srcDir} is not visible to Claude Code (--fix creates the symlink)` });
+  }
+}
+
+// Codex reads ~/.agents/skills itself (verified: skills/list returns entries from there), so
+// a copy of the same skill under ~/.codex/skills makes Codex list it TWICE. An identical copy
+// can go; a different skill with the same name is a collision eag must not resolve.
+function dedupeSkills(srcDir, dupDir, fix, out, agent) {
+  if (!exists(srcDir) || !exists(dupDir)) return;
+  for (const name of fs.readdirSync(srcDir)) {
+    if (name.startsWith('.')) continue;
+    const src = path.join(srcDir, name);
+    const dup = path.join(dupDir, name);
+    let sst = null; let dst = null;
+    try { sst = fs.statSync(src); dst = fs.lstatSync(dup); } catch { continue; }
+    if (!sst.isDirectory() || !exists(path.join(src, 'SKILL.md'))) continue;
+    if (dst.isSymbolicLink()) continue; // someone linked it on purpose; not a copy
+    if (sameTree(src, dup)) {
+      if (fix) { fs.rmSync(dup, { recursive: true, force: true }); out.push({ level: 'fixed', msg: `skill ${name}: removed the identical copy at ${dup}; ${agent} reads ${srcDir} directly` }); }
+      else out.push({ level: 'info', msg: `skill ${name}: ${dup} is an identical copy; ${agent} already reads ${srcDir}, so it is listed twice (--fix removes the copy)` });
+    } else {
+      out.push({ level: 'warn', msg: `skill ${name}: ${dup} is a DIFFERENT skill with the same name as ${src}; ${agent} lists both. Rename one, or delete the copy to use the shared one` });
+    }
   }
 }
 
@@ -52,9 +83,10 @@ export async function run(_args, flags) {
     out.push({ level: 'bad', msg: `check aborted: ${e.message}` });
     if (process.env.EAG_DEBUG) console.error(e);
   }
-  for (const o of out) console.log(`${MARK[o.level]} ${o.msg}`);
   const bad = out.filter((o) => o.level === 'bad').length;
   const warn = out.filter((o) => o.level === 'warn').length;
+  if (flags.json) { console.log(JSON.stringify({ checks: out, problems: bad, warnings: warn, exit: bad ? 1 : 0 }, null, 2)); return bad ? 1 : 0; }
+  for (const o of out) console.log(`${MARK[o.level]} ${o.msg}`);
   console.log(`\n${bad ? c.bad(`${bad} problem(s)`) : c.ok('no problems')}${warn ? `, ${c.warn(`${warn} warning(s)`)}` : ''}${!fix && warn ? c.dim('  (eag doctor --fix repairs symlinks and CLAUDE.md)') : ''}`);
   return bad ? 1 : 0;
 }
@@ -131,6 +163,7 @@ async function checks(fix, root, out) {
   // claude
   out.push(claude.available() ? { level: 'ok', msg: 'claude CLI available' } : { level: 'warn', msg: 'claude CLI not on PATH; user-scope apply needs it' });
   linkSkills(path.join(EAG_HOME, 'skills'), path.join(CLAUDE_CONFIG_DIR, 'skills'), fix, out);
+  dedupeSkills(path.join(EAG_HOME, 'skills'), path.join(CODEX_HOME, 'skills'), fix, out, 'Codex');
   if (exists(path.join(root, '.agents', 'skills'))) linkSkills(path.join(root, '.agents', 'skills'), path.join(root, '.claude', 'skills'), fix, out);
   const agentsMd = path.join(root, 'AGENTS.md');
   const claudeMd = path.join(root, 'CLAUDE.md');

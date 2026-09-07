@@ -218,3 +218,13 @@ test('codexTrust is best effort and never throws', async () => {
   } finally { process.env.PATH = before; }
   cxReset();
 });
+
+// ---- the eag skill ---------------------------------------------------------------------
+test('the shipped skill is a valid skill: frontmatter with name and description', () => {
+  const f = new URL('../skills/eag/SKILL.md', import.meta.url);
+  const text = fs.readFileSync(f, 'utf8');
+  assert.match(text, /^---\nname: eag\ndescription: .+\n---\n/, 'Claude Code and Codex both need this frontmatter');
+  for (const must of ['eag status', 'eag apply', 'eag mcp add', 'eag secret set', 'eag doctor', 'exit', '${NAME}', '--prefer']) {
+    assert.ok(text.includes(must), `the skill must teach "${must}"`);
+  }
+});

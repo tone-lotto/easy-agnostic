@@ -32,6 +32,7 @@ src/paths.js            all paths; honours EAG_HOME, CLAUDE_CONFIG_DIR, CODEX_HO
 src/source.js           load/save mcp.json + agents.json, validation, per-server policy helpers
 src/secrets.js          keychain (macOS `security`), secret-tool (Linux), .secrets.env fallback
 src/state.js            last-apply snapshot per target (.state/<target>.json)
+src/projects.js         Claude's per-project "local" servers: discovery and skip reasons for adopt --all-projects
 src/shell.js            generated ~/.agents/shell-init.sh + rc wiring (terminal launches)
 src/hooks.js            ~/.agents/bin/eag-sync launcher + the agents' own session hooks (app/IDE launches)
 src/merge.js            the 3-way merge; pure function, no I/O
@@ -41,6 +42,7 @@ src/adapters/claude.js  read ~/.claude.json, write via `claude mcp add-json|remo
 src/adapters/pi.js      read-only checks (pi-mcp-adapter reads the source directly)
 src/commands/*.js       setup (init+adopt+apply+hook+doctor --fix in one), init, adopt, status, apply, hook, mcp, secret, env, doctor
 scripts/e2e.sh          sandbox end-to-end run from copies of the real configs
+skills/eag/SKILL.md     eag's own skill, linked into ~/.agents/skills by `hook install` so agents can drive it
 test/*.test.js          unit tests (node --test); test/helpers.js holds the sandbox harness
 ```
 
@@ -99,11 +101,21 @@ The other half, for launches that never see a shell (`src/hooks.js`):
 - **The trust query is async and best effort.** stdin has to stay open until the reply arrives — `execFileSync` with `input` closes the pipe and the server exits first — and any failure resolves to null so `doctor` degrades to "unknown" rather than breaking.
 - **`claude.secrets` defaults to `literal`** for the same GUI reason: a launchd environment has none of the shell's exports.
 
+## Agent operability
+
+Four agents with no prior knowledge were given real tasks on a machine with eag installed; all finished, and their reports shaped these rules:
+- **Every state has one exit code**: 0 done · 1 error · 2 drift · 3 conflict. A script keyed on 2 must never be asked to guess whether it should apply or stop.
+- **`--json` is the contract for scripts** (`status`, `apply`, `doctor`, `mcp ls`). Anything printed for a human — glyphs, alignment, colour — is not. Native entries in JSON pass through `redactKnown()`, which puts `${NAME}` back over any known secret value.
+- **`eag <command> --help` is the flag reference.** The `USAGE` map in `src/cli.js` must list every flag a command accepts, with its value format; the global `HELP` is a summary.
+- **A resolved secret is announced.** `claude.render()` warns per secret it resolves, because the file it lands in is the user's and `--dry-run` redacts.
+- **`--prefer native` writes to the source.** Recording the native value only in the snapshot made the next apply undo the choice as "source changed".
+- **The skill is the discovery mechanism.** `skills/eag/SKILL.md` ships in the package and is linked into `~/.agents/skills` by `hook install`; keep it in step with the CLI.
+
 ## Conventions
 
 - Node >= 20, ESM, no build step, single dependency (`smol-toml`). Do not add a framework or a TypeScript toolchain for v0.
 - Keep CLI output terse and greppable; colours via `c` in `src/util.js`.
-- Exit codes: 0 clean, 1 errors, 2 drift/conflict (`status --exit-code`, `apply`).
+- Exit codes: 0 clean, 1 errors, 2 drift, 3 conflict (`status --exit-code`, `apply`). Drift and conflict demand opposite reactions from a script, so they must never share a code again.
 - New agent = new file in `src/adapters/` plus an entry in `TARGETS` in `src/plan.js` (and, for now, a branch on `t.agent` in `buildPlan`/`applyPlan`). Do not special-case agents inside commands.
 - Do not commit or push unless asked.
 - Package name on npm is `easy-agnostic`; the bin is `eag`. `files` in `package.json` limits the tarball to `bin/` and `src/`; check with `npm pack --dry-run` before publishing. An unrelated `eag` package exists on npm, so docs must always say `npx easy-agnostic`, never `npx eag`.

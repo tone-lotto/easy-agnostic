@@ -22,8 +22,12 @@ export async function run(args, flags) {
         const t = s.agents?.servers?.[name]?.targets || {};
         const off = Object.entries(t).filter(([, v]) => v === false).map(([k]) => `${k}:off`);
         const missing = [...refsIn(srv)].filter((r) => resolveSecret(r) === undefined);
-        rows.push([name, sc, srv.url ? 'http' : 'stdio', srv.url || `${srv.command} ${(srv.args || []).join(' ')}`, off.join(' '), missing.length ? c.warn(`missing: ${missing.join(',')}`) : '']);
+        rows.push([name, sc, srv.url ? 'http' : 'stdio', srv.url || `${srv.command} ${(srv.args || []).join(' ')}`, off.join(' '), missing.length ? c.warn(`missing: ${missing.join(',')}`) : '', missing]);
       }
+    }
+    if (flags.json) {
+      console.log(JSON.stringify(rows.map((r) => ({ name: r[0], scope: r[1], type: r[2], target: r[3], off: r[4] ? r[4].split(' ').map((s) => s.replace(/:off$/, '')) : [], missingSecrets: r[6] || [] })), null, 2));
+      return 0;
     }
     if (!rows.length) { console.log('no servers in source. Try: eag adopt claude'); return 0; }
     const w = [Math.max(...rows.map((r) => r[0].length)), 7, 5];
@@ -47,7 +51,16 @@ export async function run(args, flags) {
     } else if (flags.command !== undefined) {
       if (type && type !== 'stdio') throw new Error(`--type ${type} needs --url, not --command`);
       entry.type = 'stdio'; entry.command = one('command');
-      if (flags.args !== undefined) entry.args = String(one('args')).split(',');
+      // --arg is repeatable and takes one argument each; --args is one comma-separated list.
+      // A value with spaces and no comma is almost always someone expecting shell splitting,
+      // and silently storing it as one argument gives a server that never starts.
+      const args = list(flags.arg).map(String);
+      if (flags.args !== undefined) {
+        const raw = one('args');
+        if (/\s/.test(raw) && !raw.includes(',')) throw new Error(`--args is comma-separated ("${raw}" has spaces and no comma). Use --arg once per argument, or --args a,b,c`);
+        args.push(...raw.split(','));
+      }
+      if (args.length) entry.args = args;
       const env = {}; for (const e of list(flags.env)) { const m = /^([^=]+)=(.*)$/.exec(String(e)); if (!m) throw new Error(`bad --env ${e}`); env[m[1]] = m[2]; }
       if (Object.keys(env).length) entry.env = env;
       if (flags.cwd !== undefined) entry.cwd = one('cwd');

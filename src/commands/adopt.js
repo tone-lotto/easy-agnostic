@@ -18,7 +18,7 @@ const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const ident = (s) => s.toUpperCase().replace(/[^A-Z0-9]/g, '_').replace(/^(?=\d)/, '_');
 
 // Replace literal credentials with ${NAME} references and return the secrets found.
-function extractSecrets(name, obj) {
+export function extractSecrets(name, obj) {
   const out = structuredClone(obj);
   const found = [];
   const upper = ident(name);

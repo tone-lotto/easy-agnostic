@@ -55,6 +55,28 @@ export function backup(file, backupDir, label) {
   return dest;
 }
 
+// Byte-for-byte equality of two directory trees. Used to tell a harmless duplicate of a
+// skill from a genuine name collision: the first can be replaced with a link and nothing is
+// lost, the second means two different skills are fighting over one name.
+export function sameTree(a, b) {
+  let sa;
+  let sb;
+  try { sa = fs.lstatSync(a); sb = fs.lstatSync(b); } catch { return false; }
+  if (sa.isSymbolicLink() || sb.isSymbolicLink()) {
+    try { return fs.realpathSync(a) === fs.realpathSync(b); } catch { return false; }
+  }
+  if (sa.isDirectory() !== sb.isDirectory()) return false;
+  if (!sa.isDirectory()) {
+    if (sa.size !== sb.size) return false;
+    try { return fs.readFileSync(a).equals(fs.readFileSync(b)); } catch { return false; }
+  }
+  let ea;
+  let eb;
+  try { ea = fs.readdirSync(a).sort(); eb = fs.readdirSync(b).sort(); } catch { return false; }
+  if (ea.length !== eb.length || ea.some((n, i) => n !== eb[i])) return false;
+  return ea.every((n) => sameTree(path.join(a, n), path.join(b, n)));
+}
+
 export function sortKeys(v) {
   if (Array.isArray(v)) return v.map(sortKeys);
   if (v && typeof v === 'object') return Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortKeys(v[k])]));
@@ -79,6 +101,16 @@ export function mapStrings(value, fn) {
   if (Array.isArray(value)) return value.map((v) => mapStrings(v, fn));
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, mapStrings(v, fn)]));
   return value;
+}
+
+// Replace every occurrence of a known secret VALUE with its ${NAME}. Native entries can hold
+// resolved values (Claude user scope does), and --json output goes into logs.
+export function redactKnown(value, pairs) {
+  return mapStrings(value, (s) => {
+    let out = s;
+    for (const [name, v] of pairs) if (v && out.includes(v)) out = out.split(v).join(`\${${name}}`);
+    return out;
+  });
 }
 
 // Heuristic used by lint and adopt: does this string look like a literal credential?

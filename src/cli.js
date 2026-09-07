@@ -54,7 +54,7 @@ export function parseArgs(argv) {
   }
   return { flags, positional };
 }
-const BOOL = new Set(['dry-run', 'exit-code', 'fix', 'force', 'project', 'help', 'version', 'quiet', 'from-env', 'all-projects', 'keep-local', 'no-projects']);
+const BOOL = new Set(['dry-run', 'exit-code', 'fix', 'force', 'project', 'help', 'version', 'quiet', 'from-env', 'all-projects', 'keep-local', 'no-projects', 'json']);
 function push(flags, k, v) { if (flags[k] === undefined) flags[k] = v; else flags[k] = [].concat(flags[k], v); }
 
 // Unknown flags used to be parsed and then ignored, so `--dryrun` wrote for real and
@@ -64,20 +64,73 @@ const COMMAND_FLAGS = {
   setup: ['project', 'no-projects'],
   init: ['project'],
   adopt: ['scope', 'dry-run', 'force', 'all-projects', 'keep-local'],
-  status: ['scope', 'exit-code', 'quiet'],
-  apply: ['scope', 'target', 'dry-run', 'prefer', 'quiet'],
+  status: ['scope', 'exit-code', 'quiet', 'json'],
+  apply: ['scope', 'target', 'dry-run', 'prefer', 'quiet', 'json'],
   hook: ['dry-run'],
-  mcp: ['scope', 'url', 'header', 'command', 'args', 'env', 'cwd', 'type', 'force'],
+  mcp: ['scope', 'url', 'header', 'command', 'args', 'arg', 'env', 'cwd', 'type', 'force', 'json'],
   secret: ['value', 'from-env'],
   env: [],
-  doctor: ['fix'],
+  doctor: ['fix', 'json'],
+};
+
+// `eag <cmd> --help` used to print the global help, so a flag not in the summary line was
+// undiscoverable except by provoking an error. One usage block per command, with every
+// flag, its value format, and the exit codes.
+const EXIT = 'Exit codes: 0 nothing to do or done · 1 error · 2 drift (something to apply) · 3 conflict (a native edit eag refuses to overwrite)';
+const USAGE = {
+  setup: `eag setup [--project] [--no-projects]
+  init + adopt claude + adopt codex + apply + make every project agnostic + hook install + doctor --fix, in one run.
+  Safe to repeat. --project scopes it to the current repo; --no-projects leaves per-project Claude servers alone.`,
+  init: `eag init [--project]
+  Create the source files (~/.agents/mcp.json + agents.json, or ./.mcp.json) and detect installed agents.`,
+  adopt: `eag adopt <claude|codex> [--scope user|project] [--dry-run] [--force]
+eag adopt claude --all-projects [--dry-run] [--keep-local]
+  Import what an agent has today into the source. Literal credentials are moved to the secret store and
+  replaced with \${NAME}. An entry already in the source with different content is kept (--force replaces it).
+  --all-projects moves every per-project Claude server into that repo's own .mcp.json so Codex and Pi see it
+  too; --keep-local leaves the original copy in ~/.claude.json.`,
+  status: `eag status [--scope user|project|all] [--exit-code] [--quiet] [--json]
+  Drift between the source, the last apply and each agent. --quiet hides in-sync and foreign entries.
+  --exit-code makes the exit status meaningful for scripts. --json prints one object per target.
+  ${EXIT}`,
+  apply: `eag apply [--scope user|project|all] [--target claude,codex] [--dry-run] [--prefer source|native] [--quiet] [--json]
+  Write the source into each agent through a 3-way merge. A native edit since the last apply is a conflict:
+  nothing is written for that entry until you choose.
+    --prefer source   the source wins; the native edit is overwritten
+    --prefer native   the native edit wins and is written back INTO THE SOURCE, so it stays
+  --dry-run shows the plan with \${NAME} references, never resolved values. --quiet is for the launch
+  wrappers: silent when there is nothing to say, a problem printed once until it changes. --json for scripts.
+  ${EXIT}`,
+  hook: `eag hook install | status | uninstall [--dry-run]
+  Sync on launch. Terminal: ~/.agents/shell-init.sh sourced from your rc, wrapping each agent binary.
+  App/IDE: a SessionStart hook in ~/.claude/settings.json and ~/.codex/hooks.json (Codex asks you to approve
+  it once, in /hooks or Settings > Hooks). Also links eag's own skill into ~/.agents/skills so agents know it.`,
+  mcp: `eag mcp ls [--json]
+eag mcp add <name> --url <URL> [--type http|sse] [--header "K: V"]... [--scope user|project] [--force]
+eag mcp add <name> --command <BIN> [--arg <A>]... [--args a,b,c] [--env K=V]... [--cwd <DIR>] [--scope ...] [--force]
+eag mcp rm <name> [--scope user|project]
+eag mcp target <name> <claude|codex|pi> on|off [--scope user|project]
+  Edit the source without an editor. Put secrets in as \${NAME} and store the value with eag secret set.
+  --arg is repeatable and takes one argument each; --args is a single comma-separated list.
+  Then run eag apply.`,
+  secret: `eag secret set <NAME> [--value V | --from-env]
+eag secret ls | rm <NAME>
+  Values for \${NAME} references, kept in the OS secret store (macOS keychain, secret-tool, or a 0600 file).
+  With no flag the value is read from stdin when piped, or prompted without echo. --value lands in shell history.`,
+  env: `eag env
+  Print export lines for every referenced secret. Meant for eval "$(eag env)"; the generated shell-init.sh does it.`,
+  doctor: `eag doctor [--fix] [--json]
+  Wiring checks: skills symlinks, @AGENTS.md, Codex trust, Pi adapter, hook trust, secrets that are set but not
+  exported, projects only Claude can see, literal credentials in the source. --fix repairs symlinks, dedupes
+  identical skill copies and prepends @AGENTS.md. Exit 1 when there is a problem, 0 otherwise.`,
 };
 
 export async function main(argv) {
   const { flags, positional } = parseArgs(argv);
   const [cmd, ...rest] = positional;
   if (flags.version || cmd === '-v') { console.log(version); return 0; }
-  if (!cmd || cmd === 'help' || cmd === '-h' || flags.help) { console.log(HELP); return 0; }
+  if (!cmd || cmd === 'help' || cmd === '-h') { console.log(HELP); return 0; }
+  if (flags.help) { console.log(USAGE[cmd] ? `${USAGE[cmd]}\n` : HELP); return 0; }
   const mod = {
     setup: () => import('./commands/setup.js'),
     init: () => import('./commands/init.js'),

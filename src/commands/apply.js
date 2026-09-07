@@ -1,11 +1,35 @@
 import path from 'node:path';
 import { projectRoot, scopePaths } from '../paths.js';
-import { readJson, writeJson } from '../util.js';
+import { readJson, writeJson, exists, c } from '../util.js';
 import { buildPlan, applyPlan, targetsForScope, backupDirFor, TARGETS } from '../plan.js';
 import { hasWrites } from '../merge.js';
-import { c } from '../util.js';
-import { printPlan } from './status.js';
+import { loadSource, saveMcp } from '../source.js';
+import { setSecret, resolveSecret } from '../secrets.js';
+import { printPlan, toJson } from './status.js';
+import { extractSecrets } from './adopt.js';
 import { refreshInit } from '../shell.js';
+import * as codex from '../adapters/codex.js';
+
+// `--prefer native` used to record the native value only in the snapshot. The next plain
+// apply then saw state == native != source and called it "source changed", and overwrote
+// the edit the user had just chosen to keep. "Native wins" has to mean the SOURCE changes:
+// the native entry is translated back (Codex table -> source shape; a resolved secret ->
+// its ${NAME}) and written into mcp.json, exactly as `eag adopt` would.
+function keepNativeInSource(plan, actions, { say }) {
+  const kept = actions.filter((a) => a.op === 'refresh' && a.desired && a.native && / \(prefer native\)$/.test(a.reason));
+  if (!kept.length) return;
+  const paths = scopePaths(plan.scope, plan.root);
+  const src = loadSource(paths);
+  const servers = { ...src.servers };
+  for (const a of kept) {
+    const raw = plan.agent === 'codex' ? codex.toSource(a.native).entry : a.native;
+    const { entry, secrets } = extractSecrets(a.name, raw);
+    for (const [sn, val] of secrets) if (resolveSecret(sn) === undefined) setSecret(sn, val);
+    servers[a.name] = entry;
+    say(`  ${c.ok('kept    ')} ${a.name}: native version written back into ${paths.mcp}`);
+  }
+  saveMcp(paths, servers, src.mcp);
+}
 
 // --quiet runs on every agent launch, so a problem that cannot be fixed by waiting — an
 // entry the agent's own CLI refuses, a conflict the user has not resolved yet — would print
@@ -38,6 +62,15 @@ export async function run(_args, flags) {
   const tell = (line) => { if (quiet) problems.push(line); else console.log(line); };
   const prefer = flags.prefer || null;
   if (prefer && !['source', 'native'].includes(prefer)) throw new Error('--prefer must be source or native');
+  const json = flags.json ? { targets: [], warnings: [] } : null;
+  if (json) console.log = (...a) => { if (!json.captured) json.captured = []; json.captured.push(a.join(' ')); }; // never mix text into JSON
+  // A missing source used to apply as "nothing", exit 0, which is the wrong kind of quiet.
+  if (!exists(scopePaths('user').mcp)) {
+    const msg = `${scopePaths('user').mcp} does not exist. Run: eag init (or eag setup)`;
+    if (json) { process.stdout.write(`${JSON.stringify({ error: 'no source', hint: 'eag init' })}\n`); return 1; }
+    process.stdout.write(`${c.bad('no source')} ${msg}\n`);
+    return 1;
+  }
   const agentIds = [...new Set(Object.values(TARGETS).map((t) => t.agent))];
   const only = flags.target ? String(flags.target).split(',') : null;
   if (only) for (const a of only) if (!agentIds.includes(a)) throw new Error(`--target ${a} is not a write target (known: ${agentIds.join(', ')})`);
@@ -50,7 +83,9 @@ export async function run(_args, flags) {
     let printed = false;
     try {
       const plan = buildPlan(id, { root, prefer, warn: (m) => warnings.add(m) });
-      if (!quiet) { printPlan(plan, { verbose: false }); printed = true; }
+      const jt = json ? toJson(plan) : null;
+      if (jt) json.targets.push(jt);
+      if (!quiet && !json) { printPlan(plan, { verbose: false }); printed = true; }
       if (plan.skipped) continue;
       errors += plan.errors.length;
       conflicts += plan.actions.filter((a) => a.op === 'conflict').length;
@@ -60,6 +95,8 @@ export async function run(_args, flags) {
         continue;
       }
       const res = applyPlan(plan, { dryRun: dry, backupDir: backupDirFor(plan) });
+      if (!dry) keepNativeInSource(plan, plan.actions, { say });
+      if (jt) Object.assign(jt, { applied: !dry && (hasWrites(plan.actions) || !!res.changed), dryRun: dry, backup: res.backup ?? null, failures: res.failures ?? [] });
       if (dry) {
         if (res.commands?.length) say(`  ${c.dim('would run:')}\n    ${res.commands.map((a) => `claude ${a.map((x) => (x.includes(' ') || x.startsWith('{') ? JSON.stringify(x) : x)).join(' ')}`).join('\n    ')}`);
         else if (res.changed) say(`  ${c.dim(`would rewrite managed block in ${res.file}`)}`);
@@ -96,5 +133,7 @@ export async function run(_args, flags) {
   // Keep the generated shell file in step with what is installed, so an agent added after
   // `eag hook install` gets wrapped without the user having to remember this exists.
   if (!dry) { try { refreshInit(); } catch { /* never fail an apply over the shell file */ } }
-  return errors || failures ? 1 : conflicts ? 2 : 0;
+  const code = errors || failures ? 1 : conflicts ? 3 : 0;
+  if (json) { json.warnings = [...warnings]; json.exit = code; process.stdout.write(`${JSON.stringify(json, null, 2)}\n`); }
+  return code;
 }

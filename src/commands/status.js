@@ -1,8 +1,34 @@
-import { projectRoot } from '../paths.js';
+import { projectRoot, scopePaths } from '../paths.js';
 import { buildPlan, targetsForScope, TARGETS } from '../plan.js';
 import { hasDrift, summarize } from '../merge.js';
-import { c } from '../util.js';
+import { c, exists, redactKnown } from '../util.js';
+import { listSecrets, resolveSecret } from '../secrets.js';
 import * as claude from '../adapters/claude.js';
+
+// Known secret values, for redacting anything native we print or serialise.
+function secretPairs() { return listSecrets().map((n) => [n, resolveSecret(n)]); }
+
+// A conflict line that does not show the two sides makes --prefer a blind choice.
+function sides(a, pairs) {
+  const src = a.source ? JSON.stringify(a.source) : '(absent)';
+  const nat = a.native ? JSON.stringify(redactKnown(a.native, pairs)) : '(absent)';
+  return `\n      source: ${src}\n      native: ${nat}`;
+}
+
+export function toJson(plan, pairs = secretPairs()) {
+  const base = { target: plan.targetId, agent: plan.agent, scope: plan.scope, file: plan.native?.file ?? null };
+  if (plan.skipped) return { ...base, skipped: plan.skipped };
+  return {
+    ...base,
+    errors: plan.errors,
+    skippedByPolicy: plan.skippedByPolicy,
+    actions: plan.actions.map((a) => ({
+      name: a.name, op: a.op, reason: a.reason, locked: a.locked, foreign: a.foreign,
+      source: a.source ?? null, native: a.native ? redactKnown(a.native, pairs) : null,
+    })),
+    summary: summarize(plan.actions),
+  };
+}
 
 const ICON = { create: c.ok('+ create '), update: c.ok('~ update '), delete: c.ok('- delete '), adopt: c.ok('= adopt  '), refresh: c.dim('= refresh'), forget: c.dim('- forget '), noop: c.dim('  ok     '), unmanaged: c.dim('  foreign'), conflict: c.bad('! conflict') };
 
@@ -10,10 +36,11 @@ export function printPlan(plan, { verbose = true } = {}) {
   console.log(`\n${c.bold(TARGETS[plan.targetId].label)}`);
   if (plan.skipped) { console.log(`  ${c.dim(plan.skipped)}`); return; }
   for (const e of plan.errors) console.log(`  ${c.bad('error   ')} ${e}`);
+  const pairs = plan.actions.some((a) => a.op === 'conflict') ? secretPairs() : [];
   for (const a of plan.actions) {
     if (a.op === 'noop' && !verbose) continue;
     if (a.op === 'unmanaged' && !verbose) continue;
-    console.log(`  ${ICON[a.op] || a.op} ${a.name}${a.locked && a.op !== 'noop' ? c.dim(' [locked]') : ''} ${c.dim(a.reason)}`);
+    console.log(`  ${ICON[a.op] || a.op} ${a.name}${a.locked && a.op !== 'noop' ? c.dim(' [locked]') : ''} ${c.dim(a.reason)}${a.op === 'conflict' ? c.dim(sides(a, pairs)) : ''}`);
   }
   if (plan.skippedByPolicy.length) console.log(`  ${c.dim(`skipped by agents.json: ${plan.skippedByPolicy.join(', ')}`)}`);
   const s = summarize(plan.actions);
@@ -26,18 +53,37 @@ export async function run(_args, flags) {
   if (!['user', 'project', 'all'].includes(scope)) throw new Error(`--scope must be user, project or all (got "${scope}")`);
   const warnings = new Set();
   let drift = false;
+  let conflict = false;
   let errors = false;
+  const json = flags.json ? { targets: [], warnings: [] } : null;
+  // A missing source used to read as "empty", and the summary said nothing was wrong.
+  if (!exists(scopePaths('user').mcp)) {
+    if (json) { console.log(JSON.stringify({ error: 'no source', hint: 'eag init' })); return 1; }
+    console.log(`${c.bad('no source')} ${scopePaths('user').mcp} does not exist. Run: ${c.bold('eag init')} (or eag setup)`);
+    return 1;
+  }
   for (const id of targetsForScope(scope, root)) {
     try {
       const plan = buildPlan(id, { root, warn: (m) => warnings.add(m) });
-      printPlan(plan, { verbose: !flags.quiet });
-      if (!plan.skipped) { drift ||= hasDrift(plan.actions); errors ||= plan.errors.length > 0; }
+      if (json) json.targets.push(toJson(plan)); else printPlan(plan, { verbose: !flags.quiet });
+      if (!plan.skipped) {
+        drift ||= hasDrift(plan.actions);
+        conflict ||= plan.actions.some((a) => a.op === 'conflict');
+        errors ||= plan.errors.length > 0;
+      }
     } catch (e) {
-      console.log(`\n${c.bold(TARGETS[id].label)}`);
-      console.log(`  ${c.bad('error   ')} ${e.message}`);
+      if (json) json.targets.push({ target: id, error: e.message });
+      else { console.log(`\n${c.bold(TARGETS[id].label)}`); console.log(`  ${c.bad('error   ')} ${e.message}`); }
       if (process.env.EAG_DEBUG) console.error(e);
       errors = true;
     }
+  }
+  const code = errors ? 1 : conflict ? 3 : drift ? 2 : 0;
+  if (json) {
+    json.warnings = [...warnings];
+    json.exit = code;
+    console.log(JSON.stringify(json, null, 2));
+    return flags['exit-code'] ? code : 0;
   }
   if (scope !== 'user') {
     const local = Object.keys(claude.readLocal(root));
@@ -46,6 +92,7 @@ export async function run(_args, flags) {
     if (local.length) console.log(`  ${c.dim(`local-scope entries in ~/.claude.json for this project (not managed): ${local.join(', ')}. Import with: eag adopt claude --scope project`)}`);
   }
   for (const w of warnings) console.log(`${c.warn('warn')} ${w}`);
-  if (flags['exit-code']) return errors ? 1 : drift ? 2 : 0;
+  if (conflict) console.log(`\n${c.bad('conflict:')} resolve with ${c.bold('eag apply --prefer source|native')}, ${c.bold('eag adopt')}, or ${c.bold('eag mcp target <name> <agent> off')}.`);
+  if (flags['exit-code']) return code;
   return 0;
 }

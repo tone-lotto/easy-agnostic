@@ -1,11 +1,40 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { EAG_HOME } from '../paths.js';
-import { exists, c } from '../util.js';
+import { exists, writeFileAtomic, c } from '../util.js';
 import * as shell from '../shell.js';
 import * as hooks from '../hooks.js';
 import * as claude from '../adapters/claude.js';
 import { CODEX_HOME } from '../paths.js';
+import { fileURLToPath } from 'node:url';
+
+// eag ships its own skill. Copied into ~/.agents/skills it reaches every agent: Codex reads
+// that directory itself, doctor links it into ~/.claude/skills. That is how an agent that was
+// never told eag exists learns the commands, the exit codes and the secret model.
+//
+// A copy, not a link into the package: the package path changes on upgrade and vanishes on
+// uninstall, and a dangling skill is worse than none. The copy is refreshed whenever the
+// shipped file differs, so it tracks the installed version. A directory here that eag did
+// not write (no marker file) is someone's own skill named eag and is left alone.
+const SKILL_SRC = fileURLToPath(new URL('../../skills/eag', import.meta.url));
+const SKILL_DST = path.join(EAG_HOME, 'skills', 'eag');
+const SKILL_MARK = path.join(SKILL_DST, '.eag-managed');
+export function installSkill({ dryRun = false } = {}) {
+  const src = path.join(SKILL_SRC, 'SKILL.md');
+  if (!exists(src)) return { changed: false, missing: true };
+  const want = fs.readFileSync(src, 'utf8');
+  let st = null; try { st = fs.lstatSync(SKILL_DST); } catch { /* absent */ }
+  if (st?.isSymbolicLink()) { if (!dryRun) fs.unlinkSync(SKILL_DST); st = null; } // an older eag linked it
+  if (st && !exists(SKILL_MARK)) return { changed: false, shadowed: true };
+  const cur = exists(path.join(SKILL_DST, 'SKILL.md')) ? fs.readFileSync(path.join(SKILL_DST, 'SKILL.md'), 'utf8') : null;
+  if (cur === want) return { changed: false };
+  if (!dryRun) {
+    fs.mkdirSync(SKILL_DST, { recursive: true });
+    writeFileAtomic(path.join(SKILL_DST, 'SKILL.md'), want);
+    fs.writeFileSync(SKILL_MARK, 'written by eag hook install; edits here are overwritten on the next refresh\n');
+  }
+  return { changed: true, created: cur === null };
+}
 
 // Codex silently skips a hook it has not been told to trust, so the state has to be shown.
 async function codexTrustLine(indent = '  ') {
@@ -80,6 +109,12 @@ export async function run(args, flags) {
       console.log(h.changed ? `${c.ok(h.created ? 'created' : 'updated')} ${h.file} ${c.dim('(SessionStart)')}` : `${c.dim('current')} ${h.file} ${c.dim('(SessionStart)')}`);
     } else console.log(`${c.dim('skipped')} Codex is not installed`);
 
+    // 3. the skill that teaches agents to drive eag
+    const sk = installSkill({ dryRun: dry });
+    if (sk.missing) console.log(`${c.dim('skipped')} eag skill not found next to the package`);
+    else if (sk.shadowed) console.log(`${c.dim('kept   ')} ${SKILL_DST} is your own directory; eag's skill not linked`);
+    else console.log(sk.changed ? `${c.ok(sk.created ? 'created' : 'updated')} ${SKILL_DST} ${c.dim('(eag skill, so every agent knows the commands)')}` : `${c.dim('current')} ${SKILL_DST} ${c.dim('(eag skill)')}`);
+
     if (dry) { console.log(`\n${c.dim('dry run: nothing written')}`); return 0; }
     // Codex will not run a hook until it is approved, and says nothing when it skips one.
     if (hooks.codexState().installed) console.log(await codexTrustLine(''));
@@ -96,6 +131,7 @@ export async function run(args, flags) {
       if (!dry) fs.rmSync(f, { force: true });
       console.log(`${c.ok('removed')} ${f}`);
     }
+    if (exists(SKILL_MARK)) { if (!dry) fs.rmSync(SKILL_DST, { recursive: true, force: true }); console.log(`${c.ok('removed')} ${SKILL_DST}`); }
     for (const un of [hooks.uninstallClaude, hooks.uninstallCodex]) {
       const h = un({ dryRun: dry, backupDir: backupDir() });
       console.log(h.changed ? `${c.ok('updated')} ${h.file} ${c.dim('(SessionStart entry removed)')}` : `${c.dim('nothing to remove in')} ${h.file}`);

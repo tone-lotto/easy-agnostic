@@ -2,11 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { execFileSync } from 'node:child_process';
-import {
-  writeFileAtomic, writeJson, readJson, exists, backup,
-  sortKeys, deepEqual, isEmpty, prune, refsIn, mapStrings, looksLikeSecret,
-} from '../src/util.js';
+import { writeFileAtomic, writeJson, readJson, exists, backup, sortKeys, deepEqual, isEmpty, prune, refsIn, mapStrings, looksLikeSecret, sameTree, redactKnown } from '../src/util.js';
 import { sandbox, write, read, mode } from './helpers.js';
 
 // util.js is pure (no path resolution, no env at import time) so a static import is safe.
@@ -365,4 +363,33 @@ test('FORCE_COLOR paints even when stdout is a pipe', () => {
 
 test('FORCE_COLOR beats NO_COLOR, as the comment in util.js promises', () => {
   assert.ok(paintedIn({ FORCE_COLOR: '1', NO_COLOR: '1' }).includes('\x1b[32m'));
+});
+
+// sameTree is what tells "the same skill, copied" from "a different skill with the same
+// name": the first can be replaced with a link, the second must be reported and left alone.
+test('sameTree compares directory trees byte for byte', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'eag-tree-'));
+  const mk = (name, files) => { const d = path.join(base, name); for (const [f, t] of Object.entries(files)) { fs.mkdirSync(path.dirname(path.join(d, f)), { recursive: true }); fs.writeFileSync(path.join(d, f), t); } return d; };
+  const a = mk('a', { 'SKILL.md': '# one\n', 'sub/x.txt': 'x' });
+  const same = mk('same', { 'SKILL.md': '# one\n', 'sub/x.txt': 'x' });
+  const diffContent = mk('diff', { 'SKILL.md': '# two\n', 'sub/x.txt': 'x' });
+  const extraFile = mk('extra', { 'SKILL.md': '# one\n', 'sub/x.txt': 'x', 'more.txt': '' });
+  const sameSize = mk('samesize', { 'SKILL.md': '# ONE\n', 'sub/x.txt': 'x' });
+  assert.equal(sameTree(a, same), true);
+  assert.equal(sameTree(a, diffContent), false);
+  assert.equal(sameTree(a, extraFile), false, 'an extra file is a different tree');
+  assert.equal(sameTree(a, sameSize), false, 'same size, different bytes');
+  assert.equal(sameTree(a, path.join(base, 'missing')), false);
+  // a link to the same place counts as the same tree
+  const link = path.join(base, 'link'); fs.symlinkSync(a, link);
+  assert.equal(sameTree(a, link), true);
+});
+
+// Native entries can hold resolved values (Claude user scope does), and --json goes to logs.
+test('redactKnown puts ${NAME} back wherever a known secret value appears', () => {
+  const pairs = [['TOK', 'sk-live-abc123'], ['OTHER', 'zzz']];
+  const obj = { headers: { Authorization: 'Bearer sk-live-abc123' }, args: ['--key', 'sk-live-abc123'], url: 'https://x' };
+  assert.deepEqual(redactKnown(obj, pairs), { headers: { Authorization: 'Bearer ${TOK}' }, args: ['--key', '${TOK}'], url: 'https://x' });
+  assert.deepEqual(redactKnown('plain', pairs), 'plain');
+  assert.deepEqual(redactKnown({ a: 'x' }, [['EMPTY', ''], ['UNSET', undefined]]), { a: 'x' }, 'an empty or unset value must not match everything');
 });

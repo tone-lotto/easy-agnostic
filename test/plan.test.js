@@ -355,3 +355,25 @@ test('project targets appear only where a project source exists', () => {
   assert.deepEqual(targetsForScope('project', PROJECT), ['codex-project']);
   assert.deepEqual(targetsForScope('user', PROJECT), ['claude-user', 'codex-user']);
 });
+
+// Codex reads ~/.agents/skills itself, so a copy under ~/.codex/skills makes it list the
+// skill twice. Identical -> the copy can go. Different -> a collision eag must not resolve.
+test('doctor dedupes an identical Codex skill copy and flags a different one', async () => {
+  const { run: doctor } = await import('../src/commands/doctor.js');
+  const agentsSkills = path.join(process.env.EAG_HOME, 'skills');
+  const codexSkills = path.join(process.env.CODEX_HOME, 'skills');
+  const mk = (base, name, body) => { const d = path.join(base, name); fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, 'SKILL.md'), body); };
+  mk(agentsSkills, 'same', '---\nname: same\n---\nx\n'); mk(codexSkills, 'same', '---\nname: same\n---\nx\n');
+  mk(agentsSkills, 'clash', '---\nname: clash\n---\nA\n'); mk(codexSkills, 'clash', '---\nname: clash\n---\nB\n');
+  fs.writeFileSync(path.join(process.env.EAG_HOME, 'mcp.json'), JSON.stringify({ mcpServers: {} }));
+  const lines = [];
+  const orig = console.log; console.log = (...a) => lines.push(a.join(' '));
+  let code;
+  try { code = await doctor([], { fix: true }); } finally { console.log = orig; }
+  const text = lines.join('\n').replace(/\x1b\[[0-9;]*m/g, '');
+  assert.match(text, /skill same: removed the identical copy/);
+  assert.equal(fs.existsSync(path.join(codexSkills, 'same')), false, 'the identical copy is gone');
+  assert.match(text, /skill clash: .* is a DIFFERENT skill with the same name/);
+  assert.equal(fs.readFileSync(path.join(codexSkills, 'clash', 'SKILL.md'), 'utf8'), '---\nname: clash\n---\nB\n', 'a different skill is never touched, even with --fix');
+  assert.equal(code, 0, 'a collision is a warning, not a problem: doctor still exits 0');
+});

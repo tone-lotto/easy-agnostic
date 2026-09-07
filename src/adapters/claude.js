@@ -45,18 +45,23 @@ export function removeLocal(root, name) {
 // authenticate. So `literal` is the default because it works from every launch context, and
 // `env` is the opt-in for someone who only ever starts their agents from a terminal
 // (agents.json: {"claude": {"secrets": "env"}}).
-export function render(name, src, { secrets = 'literal' } = {}) {
+export function render(name, src, { secrets = 'literal', warn = () => {} } = {}) {
   if (secrets === 'env') {
     // A reference to a value that exists nowhere would hand the agent a server that can
     // never authenticate. Fail here, exactly as literal mode does.
     for (const r of refsIn(src)) if (resolveSecret(r) === undefined) throw new Error(`${name}: secret ${r} is not set. Run: eag secret set ${r}`);
     return canonical(src);
   }
+  const resolved = new Set();
   const out = mapStrings(src, (s) => s.replace(SECRET_REF, (_m, n) => {
     const v = resolveSecret(n);
     if (v === undefined) throw new Error(`${name}: secret ${n} is not set. Run: eag secret set ${n}`);
+    resolved.add(n);
     return v;
   }));
+  // A value written resolved must never be invisible: dry-run redacts it, and the file it
+  // lands in is the user's. Say so every time, and say how to stop it.
+  for (const n of resolved) warn(`${name}: ${n} is written to ~/.claude.json as a resolved value (works from any launch context). Terminal-only? Set claude.secrets = "env" in agents.json to keep it a reference`);
   return canonical(out);
 }
 

@@ -87,6 +87,10 @@ eag hook install              # sync on launch (see below); safe to re-run, undo
 eag doctor --fix              # checks skills symlinks, @AGENTS.md, Codex trust, Pi adapter, secrets; --fix repairs the first two
 ```
 
+## For agents
+
+`eag` is meant to be driven by coding agents as much as by people, and ships its own skill: `eag hook install` links `skills/eag/SKILL.md` into `~/.agents/skills`, which Codex reads directly and `doctor` links into Claude Code. So an agent on a machine with eag installed knows the commands, the exit codes and the secret model without being told. For scripts: `--json` on `status`, `apply`, `doctor` and `mcp ls`; `eag <command> --help` for every flag; and exit codes that mean one thing each — `0` done · `1` error · `2` drift · `3` conflict.
+
 ## Daily use
 
 ```bash
@@ -94,7 +98,8 @@ eag mcp add linear --url https://mcp.linear.app/mcp --header 'Authorization: Bea
 eag secret set LINEAR_TOKEN       # prompts; or pipe it in a script (--value would land in shell history)
 eag apply
 eag mcp target linear codex off   # keep it out of one agent
-eag status --exit-code            # 0 clean, 2 drift, 1 errors (good for a shell prompt or CI)
+eag status --exit-code            # 0 clean · 2 drift · 3 conflict · 1 error (good for a shell prompt or CI)
+eag status --json                 # the same, as one object per target, for scripts and agents
 ```
 
 ## When eag stops
@@ -103,12 +108,11 @@ An apply that finds the agent's file changed since the last one reports a confli
 
 ```bash
 eag apply --prefer source     # your edit was a mistake: the source wins
-eag apply --prefer native     # your edit was right, but only for now: eag stops tracking that entry
-eag adopt claude              # your edit was right and belongs in the source: import it back
+eag apply --prefer native     # your edit was right: it is written back into the source and stays
 eag mcp target <name> claude off   # that entry is not eag's business at all
 ```
 
-`--prefer native` disowns the entry rather than teaching eag about it, so the next `status` shows it as foreign. If you want the edit to survive as the new truth, `eag adopt` is the answer.
+The conflict line shows both sides, and `eag status --json` carries them as `source` and `native`, so the choice is never blind. `--prefer native` re-references any secret it finds (the value goes to the store, `${NAME}` goes into the source) and translates a Codex table back to the source shape — the same path `eag adopt` takes.
 
 Entries eag has never written are never touched, with or without a conflict: a server another tool manages in `~/.codex/config.toml` (outside eag's marker block) is reported as `locked` and left exactly where it is.
 
@@ -167,6 +171,7 @@ The generated file is refreshed by every `eag apply`, so an agent you install la
 - Codex has no `${VAR}` expansion, so a reference it has no env-var field for is written as a literal value (eag warns). A `config.toml` eag creates, or one whose managed block ends up carrying such a literal, is written `0600`; otherwise the file keeps the permissions it had, and eag never widens them.
 - **A reference is only as good as the environment the agent starts in.** Claude Code does expand `${VAR}` — verified against claude 2.1.x, in `env` values and in HTTP headers, including mid-string — but it expands from its own process environment. On macOS an agent launched from a desktop app or an IDE inherits the launchd environment, not your shell rc, so a reference resolves to nothing there and the server cannot authenticate. That is why Claude Code gets resolved values by default. If you only ever start your agents from a terminal, set `"claude": {"secrets": "env"}` in `agents.json` and no credential is written to `~/.claude.json` at all. The same split applies to Codex, which always uses env-var pointers (`bearer_token_env_var`, `env_vars`): those need `eval "$(eag env)"` in your shell rc, and they do not resolve for an app-launched Codex either.
 - Keys Codex has no field for (e.g. Claude's `directTools`) are dropped for Codex and kept for Claude/Pi.
+- Skills are wired, not synced: `~/.agents/skills` is read by Codex directly and linked into `~/.claude/skills` by `doctor --fix`. A copy of the same skill under `~/.codex/skills` makes Codex list it twice (`doctor --fix` removes an identical copy); two *different* skills sharing a name are reported and left alone.
 - `eag adopt` extracts credentials from headers and env only: a token embedded in a URL or in `args` stays in the source as is. `eag doctor` checks headers, env and the URL by shape, so it catches the common token formats and a `user:password@` URL, but it is a heuristic, not a guarantee.
 - A write failure for one entry (e.g. a name the `claude` CLI itself reserves) is reported (`failed   <name>: <reason>`) and skipped, not fatal to the rest of `apply`; a later run retries it.
 - No OAuth sharing yet: OAuth-backed remote servers (e.g. Supabase, Vercel, PostHog) still log in once per agent. A stdio wrapper (`eag run`) is the planned phase 2.

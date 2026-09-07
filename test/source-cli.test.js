@@ -283,6 +283,9 @@ test('a correctly spelled --dry-run is accepted and reaches the command', async 
     () => capture(() => main(['apply', '--dry-run', '--scope', 'nope'])),
     /--scope must be user, project or all \(got "nope"\)/,
   );
+  // A missing source is now an error (it used to apply as "nothing", exit 0), so give the
+  // sandbox an empty one before asserting the dry run itself is clean.
+  write(path.join(process.env.EAG_HOME, 'mcp.json'), JSON.stringify({ mcpServers: {} }));
   const stateDir = path.join(process.env.EAG_HOME, '.state');
   const before = fs.existsSync(stateDir) ? fs.readdirSync(stateDir).sort() : null;
   const r = await capture(() => main(['apply', '--dry-run']));
@@ -294,9 +297,12 @@ test('a correctly spelled --dry-run is accepted and reaches the command', async 
 });
 
 test('--help and --version answer before any flag is validated', async () => {
+  // `<cmd> --help` prints that command's own usage now, not the global summary.
   const help = await capture(() => main(['apply', '--help']));
   assert.equal(help.code, 0);
-  assert.match(help.out, /Usage: eag <command> \[options\]/);
+  assert.match(help.out, /^eag apply \[--scope/m);
+  assert.match(help.out, /--prefer native/);
+  assert.match(help.out, /Exit codes: 0 .* 1 error .* 2 drift .* 3 conflict/);
   const version = await capture(() => main(['--version']));
   assert.equal(version.code, 0);
   assert.match(version.out, /^\d+\.\d+\.\d+/);
