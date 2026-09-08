@@ -114,6 +114,30 @@ export function apply(items, { dryRun = false, ...options } = {}) {
   return dryRun ? execute() : withMutationLock(execute);
 }
 
+// Launch-time wiring only: never adopt, move, delete, or replace agent-local skills.
+// Presence in the shared project directory is the user's choice to share a skill.
+export function syncProjectLinks({ root = projectRoot(), dryRun = false } = {}) {
+  const execute = () => {
+    const options = { scope: 'project', root };
+    const { shared, agents } = locations(options);
+    const results = [];
+    for (const name of realSkills(shared, options)) {
+      const from = path.join(agents.claude.dir, name);
+      const dest = path.join(shared, name);
+      if (present(from)) {
+        let target; try { target = fs.realpathSync(from); } catch { /* dangling link */ }
+        if (target === fs.realpathSync(dest) || sameTree(from, dest)) continue;
+        results.push({ name, op: 'conflict', message: `${name}: Claude skill path already exists; left untouched. Inspect ${from}` });
+        continue;
+      }
+      applyLocked([{ name, agent: 'claude', from, op: 'link' }], { ...options, dryRun });
+      results.push({ name, op: 'link', path: from });
+    }
+    return results;
+  };
+  return dryRun ? execute() : withMutationLock(execute);
+}
+
 function applyLocked(items, { dryRun, ...options }) {
   const { shared: sharedDir, agents } = locations(options);
   const done = [];
@@ -176,12 +200,14 @@ export function inventory(options = {}) {
     for (const name of fs.readdirSync(dir).sort()) {
       if (name.startsWith('.')) continue;
       const file = path.join(dir, name);
-      if (!exists(path.join(file, 'SKILL.md'))) continue;
-      rows.push({ name, scope: set.scope, origin, path: file, inherited: scope === 'project' && set.scope === 'user', linked: fs.lstatSync(file).isSymbolicLink() });
+      const linked = fs.lstatSync(file).isSymbolicLink();
+      const broken = linked && !exists(file);
+      if (!broken && !exists(path.join(file, 'SKILL.md'))) continue;
+      rows.push({ name, scope: set.scope, origin, path: file, inherited: scope === 'project' && set.scope === 'user', linked, broken });
     }
   }
   for (const row of rows) {
-    row.conflict = rows.some((other) => other !== row && other.scope === row.scope && other.name === row.name && !sameTree(other.path, row.path));
+    row.conflict = !row.broken && rows.some((other) => other !== row && !other.broken && other.scope === row.scope && other.name === row.name && !sameTree(other.path, row.path));
     row.sameNameInUserScope = row.scope === 'project' && rows.some((other) => other.scope === 'user' && other.name === row.name);
   }
   return rows;

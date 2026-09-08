@@ -210,7 +210,7 @@ async function adoptSkills(flags) {
   if (dry) { console.log(`\n${c.dim('dry run: nothing moved')}`); return 0; }
   const done = skills.apply(items, options);
   const clashes = items.filter((i) => i.op === 'collision').length;
-  console.log(`\n${done.filter((d) => d.op === 'adopt').length} skill(s) now shared, ${done.filter((d) => d.op === 'duplicate').length} duplicate(s) dropped${clashes ? `, ${c.warn(`${clashes} name clash(es) left alone`)}` : ''}`);
+  console.log(`\n${done.filter((d) => d.op === 'adopt').length} skill(s) now shared, ${done.filter((d) => d.op === 'link').length} link(s) created, ${done.filter((d) => d.op === 'duplicate').length} duplicate(s) dropped${clashes ? `, ${c.warn(`${clashes} name clash(es) left alone`)}` : ''}`);
   if (done.length) console.log(c.dim(options.scope === 'project' ? 'Project skills are shared in .agents/skills and linked into .claude/skills. Global skills were not moved.' : 'Codex reads ~/.agents/skills directly; run eag doctor --fix to link them into Claude Code.'));
   return clashes ? 2 : 0;
 }

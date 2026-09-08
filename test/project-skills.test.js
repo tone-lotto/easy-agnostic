@@ -108,3 +108,88 @@ test('project-scoped doctor repairs project links without deduplicating global s
   assert.ok(fs.lstatSync(path.join(p.agents.claude.dir, 'doctor-local')).isSymbolicLink());
   assert.equal(fs.existsSync(path.join(skills.AGENT_DIRS.claude.dir, 'doctor-global')), false);
 });
+
+test('launch wiring creates only missing shared project links and is idempotent', () => {
+  const p = project(); make(p.shared, 'shared');
+  const privateFile = make(p.agents.codex.dir, 'private');
+  make(p.shared, 'collision'); const collision = make(p.agents.claude.dir, 'collision', 'different');
+  make(p.shared, 'broken'); fs.symlinkSync('missing-target', path.join(p.agents.claude.dir, 'broken'));
+  const preview = skills.syncProjectLinks({ root: p.root, dryRun: true });
+  assert.equal(fs.existsSync(path.join(p.agents.claude.dir, 'shared')), false);
+  assert.equal(preview.filter(r => r.op === 'conflict').length, 2);
+  skills.syncProjectLinks({ root: p.root });
+  assert.equal(read(path.join(p.agents.claude.dir, 'shared', 'SKILL.md')), 'shared');
+  assert.equal(read(collision), 'different');
+  assert.equal(read(privateFile), 'private');
+  assert.equal(fs.readlinkSync(path.join(p.agents.claude.dir, 'broken')), 'missing-target');
+  assert.equal(skills.syncProjectLinks({ root: p.root }).filter(r => r.op === 'link').length, 0);
+  assert.equal(fs.existsSync(path.join(skills.SHARED, 'shared')), false);
+});
+
+test('launch wiring refuses project directory aliases of global skill locations', () => {
+  const p = project(); make(p.shared, 'safe');
+  fs.symlinkSync(path.dirname(skills.AGENT_DIRS.claude.dir), path.join(p.root, '.claude'));
+  assert.throws(() => skills.syncProjectLinks({ root: p.root }), /symlinks|overlaps/);
+  assert.equal(fs.existsSync(path.join(skills.AGENT_DIRS.claude.dir, 'safe')), false);
+});
+
+test('inventory exposes orphaned links even when the original shared skill is gone', () => {
+  const p = project(); fs.mkdirSync(p.agents.claude.dir, { recursive: true });
+  const link = path.join(p.agents.claude.dir, 'moved');
+  fs.symlinkSync('../../.agents/skills/moved', link);
+  const row = skills.inventory(p.options).find(r => r.name === 'moved');
+  assert.equal(row.broken, true); assert.equal(row.linked, true);
+  assert.equal(row.conflict, false);
+  assert.equal(fs.readlinkSync(link), '../../.agents/skills/moved');
+});
+
+test('default launch apply wires a skills-only project without MCP and preserves explicit user scope', () => {
+  const p = project(); make(p.shared, 'launch');
+  const emptyHome = path.join(base, 'empty-home'); fs.mkdirSync(emptyHome);
+  const run = (...args) => spawnSync(process.execPath, [cli, 'apply', ...args], {
+    env: { ...process.env, EAG_HOME: emptyHome, EAG_PROJECT: p.root, PATH: '/nonexistent' },
+    encoding: 'utf8', timeout: 20000,
+  });
+  assert.equal(run('--scope', 'user', '--json').status, 1);
+  assert.equal(fs.existsSync(p.agents.claude.dir), false);
+  const preview = run('--dry-run', '--json');
+  assert.equal(preview.status, 0, preview.stderr || preview.stdout);
+  assert.equal(JSON.parse(preview.stdout).skills[0].op, 'link');
+  assert.equal(fs.existsSync(p.agents.claude.dir), false);
+  const launch = run('--quiet');
+  assert.equal(launch.status, 0, launch.stderr || launch.stdout);
+  assert.equal(launch.stdout, '');
+  assert.equal(read(path.join(p.agents.claude.dir, 'launch', 'SKILL.md')), 'launch');
+  assert.equal(fs.existsSync(path.join(emptyHome, 'mcp.json')), false);
+  assert.deepEqual(JSON.parse(run('--json').stdout).skills, []);
+  make(p.shared, 'conflict'); make(p.agents.claude.dir, 'conflict', 'private');
+  const conflict = run('--json');
+  assert.equal(conflict.status, 3, conflict.stderr || conflict.stdout);
+  assert.equal(JSON.parse(conflict.stdout).skills[0].op, 'conflict');
+});
+
+test('generated SessionStart launcher wires shared project skills with no MCP source', async () => {
+  const { renderLauncher } = await import('../src/hooks.js');
+  const p = project(); make(p.shared, 'session-skill');
+  const emptyHome = path.join(p.root, 'user-state'); fs.mkdirSync(emptyHome);
+  const binDir = path.join(p.root, 'bin');
+  write(path.join(binDir, 'eag'), `import ${JSON.stringify(cli)};`);
+  const launcher = write(path.join(p.root, 'eag-sync'), renderLauncher({ entry: cli, binDir }));
+  const result = spawnSync('/bin/sh', [launcher], { cwd: p.root,
+    env: { ...process.env, EAG_PROJECT: p.root, EAG_HOME: emptyHome, PATH: '/nonexistent' },
+    encoding: 'utf8', timeout: 20000 });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, '');
+  assert.equal(read(path.join(p.agents.claude.dir, 'session-skill', 'SKILL.md')), 'session-skill');
+});
+
+test('doctor reports orphaned global skill links without retargeting them', () => {
+  const p = project();
+  const link = path.join(skills.AGENT_DIRS.claude.dir, 'orphan-diagnostic');
+  fs.mkdirSync(path.dirname(link), { recursive: true }); fs.symlinkSync('gone', link);
+  const result = spawnSync(process.execPath, [cli, 'doctor', '--scope', 'project', '--json'], {
+    env: { ...process.env, EAG_PROJECT: p.root, PATH: '/nonexistent' }, encoding: 'utf8', timeout: 20000,
+  });
+  assert.ok(JSON.parse(result.stdout).checks.some(r => r.level === 'warn' && r.msg.includes('orphan-diagnostic') && r.msg.includes('orphaned')));
+  assert.equal(fs.readlinkSync(link), 'gone');
+});

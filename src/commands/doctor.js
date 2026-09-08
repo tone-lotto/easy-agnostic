@@ -97,6 +97,11 @@ export async function run(_args, flags) {
 }
 
 async function checks(fix, root, out, scope) {
+  // An orphan has no matching shared source, so linkSkills cannot discover it.
+  // Report it without guessing a new target (especially a project-only skill).
+  for (const skill of skillsMod.inventory({ scope: 'user' })) {
+    if (skill.broken) out.push({ level: 'warn', msg: `skill ${skill.name}: orphaned broken link at ${skill.path}; inspect before removing or reconnecting it` });
+  }
   // source
   const user = loadSource(scopePaths('user'));
   out.push(user.hasMcp ? { level: 'ok', msg: `source: ${user.paths.mcp} (${Object.keys(user.servers).length} servers)` } : { level: 'bad', msg: `source missing: ${user.paths.mcp}. Run: eag init` });

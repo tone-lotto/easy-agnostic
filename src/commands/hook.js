@@ -53,7 +53,7 @@ async function status() {
   const st = shell.rcState();
   const bins = shell.wrappableBins();
   const initThere = exists(shell.INIT_FILE);
-  const initCurrent = initThere && fs.readFileSync(shell.INIT_FILE, 'utf8') === shell.render(bins);
+  const initCurrent = initThere && fs.readFileSync(shell.INIT_FILE, 'utf8') === shell.render(bins, { binDir: globalBinDir() });
   const cl = hooks.claudeState();
   const cx = hooks.codexState();
   const launcherCurrent = exists(hooks.LAUNCHER) && fs.readFileSync(hooks.LAUNCHER, 'utf8') === hooks.renderLauncher({ binDir: globalBinDir() });

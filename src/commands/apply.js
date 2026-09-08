@@ -11,6 +11,7 @@ import { refreshInit } from '../shell.js';
 import * as codex from '../adapters/codex.js';
 import { installSkill } from './hook.js';
 import { syncInstructions, instructionPaths } from '../instructions.js';
+import { syncProjectLinks } from '../skills.js';
 
 // `--prefer native` used to record the native value only in the snapshot. The next plain
 // apply then saw state == native != source and called it "source changed", and overwrote
@@ -74,7 +75,10 @@ async function runApply(_args, flags) {
   if (json) console.log = (...a) => { if (!json.captured) json.captured = []; json.captured.push(a.join(' ')); }; // never mix text into JSON
   // A missing source used to apply as "nothing", exit 0, which is the wrong kind of quiet.
   const hasMcp = exists(scopePaths('user').mcp);
-  if (!hasMcp && !exists(instructionPaths(root).state)) {
+  // Default launch apply also wires this project's explicitly shared skills, like
+  // enrolled instructions. An explicit --scope user opts out of project wiring.
+  const hasProjectSkills = flags.scope !== 'user' && exists(path.join(root, '.agents', 'skills')) && !scopePaths('project', root).collides;
+  if (!hasMcp && !exists(instructionPaths(root).state) && !hasProjectSkills) {
     const msg = `${scopePaths('user').mcp} does not exist. Run: eag init (or eag setup)`;
     if (json) { process.stdout.write(`${JSON.stringify({ error: 'no source', hint: 'eag init' })}\n`); return 1; }
     process.stdout.write(`${c.bad('no source')} ${msg}\n`);
@@ -87,6 +91,20 @@ async function runApply(_args, flags) {
   let conflicts = 0;
   let errors = 0;
   let failures = 0;
+  if (hasProjectSkills) {
+    try {
+      const links = syncProjectLinks({ root, dryRun: dry });
+      if (json) json.skills = links;
+      for (const link of links) {
+        if (link.op === 'conflict') { conflicts++; tell(`skills: ${link.message}`); }
+        else say(`skills: ${dry ? 'would link' : 'linked'} ${link.name} into .claude/skills`);
+      }
+    } catch (e) {
+      errors++;
+      if (json) json.skills = [{ op: 'error', message: e.message }];
+      tell(`skills: ${e.message}`);
+    }
+  }
   // Enrollment is explicit (instructions or doctor --fix). Launch hooks must not
   // start mirroring files in an unrelated repository just because it was opened.
   try {
@@ -147,7 +165,7 @@ async function runApply(_args, flags) {
     }
   }
   for (const w of warnings) say(`${c.warn('warn')} ${w}`);
-  if (conflicts) tell(`${quiet ? '' : '\n'}${c.bad(`${conflicts} conflict(s) left untouched.`)} For MCP use ${c.bold('eag apply --prefer source|native')}; for instructions use ${c.bold('eag instructions --prefer agents|claude')}.`);
+  if (conflicts) tell(`${quiet ? '' : '\n'}${c.bad(`${conflicts} conflict(s) left untouched.`)} For MCP use ${c.bold('eag apply --prefer source|native')}; for instructions use ${c.bold('eag instructions --prefer agents|claude')}; for skills inspect the reported paths (no automatic winner).`);
   if (failures && !quiet) console.log(`\n${c.bad(`${failures} write(s) failed.`)} See "failed" above; a retry picks them up again.`);
   if (dry) say(`\n${c.dim('dry run: nothing written')}`);
   if (quiet && !dry) reportQuiet(problems);

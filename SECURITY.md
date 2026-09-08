@@ -17,6 +17,15 @@ Open a [security advisory](https://github.com/tone-lotto/easy-agnostic/security/
 
 ## Known limits
 
+- **Conversation history is opt-in, read-only and project-filtered.** `eag history` reads local
+  vendor JSONL files without a background index, network calls or keychain access. It never
+  replays commands or sends a handoff to another provider. Optional output files use exclusive
+  creation and mode `0600`. Records are untrusted evidence, not new instructions or proof of
+  current state. Heuristic transcript redaction can miss unusual credentials and does not remove
+  all confidential information; review before sharing. Project matching uses recorded metadata,
+  not an OS security boundary. Read/scan sizes are bounded and omissions reported. See
+  [history limits](docs/history.md#limits-and-threat-model).
+
 - Local mutation locks coordinate eag processes using the same EAG_HOME; they do not lock out editors, agent CLIs, or other installations. Apply checks source, policy, snapshot, and native contents against the plan. Source and Codex writes compare contents again before replacement, but this is not an operating-system compare-and-swap and cannot eliminate every external-writer race. Project writes reject aliases of user-level configuration/state paths. A crashed mutation may leave a lock requiring manual recovery after confirming no eag process is running.
 - Explicit npm installations also hold a lock at the npm global prefix, outside the replaced package tree, so separate EAG_HOME configurations targeting that prefix cannot install concurrently. Direct npm commands do not participate in this lock.
 - Literal headers, environment values, command arguments, and URL query credentials cause managed Codex writes to tighten file permissions, even for short values without recognizable token prefixes. This is conservative: ordinary command arguments may also make the file private.

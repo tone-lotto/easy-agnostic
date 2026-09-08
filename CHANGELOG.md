@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.11.0 — 2026-09-08
+
+- Add read-only, project-scoped `history list/search/read/handoff` for local Claude Code, Codex and Pi logs and explicit JSONL exports. Include redaction, source-line provenance, bounded pagination, opt-in tool results, and private local handoffs without network calls or automatic replay.
+
+- Wire missing Claude links for shared project skills during default/launch apply, including skills-only projects. Preserve existing paths, report conflicts, and allow explicit user scope to skip project wiring.
+- Include orphaned symlinks in skill inventory instead of silently hiding them. Project-only skills remain project-only.
+- Fail closed on malformed history directory changes, mixed session identities, and unknown message channels. Fix the false outdated-shell warning after hook installation.
+
 ## 0.10.0 — 2026-09-07
 
 - Refresh target-filtered credentials inside a launch subshell instead of exporting them at terminal startup. Pi gets a credential wrapper; missing required values stop launch. Restart existing terminals after upgrading to clear old inherited exports.

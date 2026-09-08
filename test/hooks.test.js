@@ -230,6 +230,15 @@ test('the shipped skill is a valid skill: frontmatter with name and description'
   }
 });
 
+test('hook status agrees with freshly installed shell wiring including npm bin directory', () => {
+  writeSettings({}); cxReset();
+  const env = { ...process.env, EAG_SHELL_RC: path.join(dir, 'status-rc'), PATH: path.dirname(process.execPath), SHELL: '/bin/zsh' };
+  const cli = path.resolve('bin/eag.js');
+  execFileSync(process.execPath, [cli, 'hook', 'install'], { env, timeout: 20000 });
+  const result = execFileSync(process.execPath, [cli, 'hook', 'status'], { env, encoding: 'utf8', timeout: 20000 });
+  assert.doesNotMatch(result, /out of date|Run eag hook install/);
+});
+
 // After `npm i -g` upgrades eag, the launcher must run the NEW version without being
 // rewritten, and a launcher generated from an npx cache must outlive that cache.
 test('the launcher prefers the installed eag over the package it was generated from', () => {

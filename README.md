@@ -79,6 +79,10 @@ eag instructions --dry-run    # preview bidirectional AGENTS.md / CLAUDE.md sync
 
 ## Project-only skills
 
+For on-demand conversation search and cross-agent handoffs, see [conversation history](docs/history.md).
+`eag history search "topic"` finds local project evidence; `eag history handoff claude SESSION_ID --to codex`
+prepares quoted excerpts without sending them or running another agent.
+
 ```bash
 eag adopt skills --scope project --dry-run
 eag adopt skills --scope project
@@ -87,6 +91,10 @@ eag skills ls --scope project --json
 ```
 
 Project adoption moves skills from this repo's `.claude/skills` and `.codex/skills` into `.agents/skills`, and creates relative links in `.claude/skills`. Existing shared project skills get Claude links too. `eag setup --project` includes this step. Commit the skill directories and links to share them with collaborators.
+
+Default `eag apply` (including launch hooks) also creates missing Claude links for skills already in the current project's `.agents/skills`, even in skills-only projects with no MCP source. It never adopts agent-private skills or replaces existing paths; conflicting or broken destinations are reported for manual review. `--dry-run` previews the links, and explicit `--scope user` skips project skill wiring. Restart an already-open Claude Code session after repairing links; launch-time discovery is controlled by the agent, not eag.
+
+`eag skills ls` includes `[broken link]` entries (JSON: `broken: true`), including orphaned global links left after a skill was moved. eag does not reconnect a global link to a project skill, because that would expose a project-only skill globally.
 
 Global skills are never moved into a project. Listing reports user-scope entries separately as inherited, identifies shared versus agent-specific locations, and flags same-scope conflicts and names also present globally. It is a filesystem inventory, not a guarantee of each running agent's discovery or precedence rules. Different project skills with the same name stay untouched; rename or reconcile them before adoption. Project directory symlinks that could redirect writes outside the repo are refused. The default for both commands remains `--scope user`.
 

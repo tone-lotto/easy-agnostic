@@ -8,7 +8,7 @@ export async function run(args, flags) {
     const skills = inventory({ scope, root: projectRoot() });
     if (flags.json) console.log(JSON.stringify({ scope, skills }, null, 2));
     else if (!skills.length) console.log('no skills found');
-    else for (const s of skills) console.log(`${s.inherited ? 'inherited' : s.scope} ${s.origin} ${s.name}${s.linked ? ' [link]' : ''}${s.conflict ? ' [conflict]' : ''}${s.sameNameInUserScope ? ' [also in user scope]' : ''} ${s.path}`);
+    else for (const s of skills) console.log(`${s.inherited ? 'inherited' : s.scope} ${s.origin} ${s.name}${s.broken ? ' [broken link]' : s.linked ? ' [link]' : ''}${s.conflict ? ' [conflict]' : ''}${s.sameNameInUserScope ? ' [also in user scope]' : ''} ${s.path}`);
     return 0;
   } catch (e) {
     if (!flags.json) throw e;

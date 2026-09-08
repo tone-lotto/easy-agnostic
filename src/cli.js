@@ -19,6 +19,8 @@ Usage: eag <command> [options]
                                         share skills within the selected scope
   skills ls [--scope user|project] [--json]
                                         list shared, agent-specific, and inherited user skills
+  history list | search QUERY | read VENDOR ID | handoff VENDOR ID --to AGENT
+                                        retrieve project-local conversation evidence on demand; never sends it
   adopt claude --all-projects [--dry-run] [--keep-local]
                                         make every project agnostic: Claude keeps per-project servers to itself in
                                         ~/.claude.json, so this moves each one into that repo's own .mcp.json, which
@@ -29,9 +31,8 @@ Usage: eag <command> [options]
                                         write the source into each agent (3-way merge, never clobbers)
   hook install | status | uninstall [--dry-run]
                                         sync on launch: a generated ~/.agents/shell-init.sh, sourced from your
-                                        shell rc, exports the \${NAME} values and syncs each agent just before
-                                        it starts. Covers terminal launches; an agent opened from a desktop app
-                                        or an IDE does not read your rc and syncs on the next terminal launch.
+                                        shell rc, resolves credentials inside each agent's launch subshell.
+                                        SessionStart hooks cover supported app/IDE launches separately.
   mcp ls | add <name> ... | rm <name> | target <name> <agent> on|off
                                         edit the source without opening an editor
   secret set <NAME> [--value V | --from-env] | ls | rm <NAME>
@@ -56,13 +57,13 @@ export function parseArgs(argv) {
     if (a.startsWith('--')) {
       const [k, v] = a.slice(2).split(/=(.*)/s);
       if (v !== undefined) push(flags, k, v);
-      else if (i + 1 < argv.length && !argv[i + 1].startsWith('--') && !BOOL.has(k)) push(flags, k, argv[++i]);
+      else if (i + 1 < argv.length && !argv[i + 1].startsWith('--') && (!BOOL.has(k) || (k === 'project' && argv[0] === 'history'))) push(flags, k, argv[++i]);
       else flags[k] = true;
     } else positional.push(a);
   }
   return { flags, positional };
 }
-const BOOL = new Set(['dry-run', 'exit-code', 'fix', 'force', 'project', 'help', 'version', 'quiet', 'from-env', 'all-projects', 'keep-local', 'no-projects', 'json', 'check']);
+const BOOL = new Set(['dry-run', 'exit-code', 'fix', 'force', 'project', 'help', 'version', 'quiet', 'from-env', 'all-projects', 'keep-local', 'no-projects', 'json', 'check', 'tools']);
 function push(flags, k, v) { if (flags[k] === undefined) flags[k] = v; else flags[k] = [].concat(flags[k], v); }
 
 // Unknown flags used to be parsed and then ignored, so `--dryrun` wrote for real and
@@ -80,6 +81,7 @@ const COMMAND_FLAGS = {
   env: ['target'],
   instructions: ['dry-run', 'prefer', 'json'],
   skills: ['scope', 'json'],
+  history: ['project', 'vendor', 'file', 'to', 'output', 'offset', 'char-offset', 'limit', 'max-chars', 'tools', 'json'],
   doctor: ['fix', 'json', 'scope'],
   update: ['check', 'force'],
 };
@@ -89,6 +91,20 @@ const COMMAND_FLAGS = {
 // flag, its value format, and the exit codes.
 const EXIT = 'Exit codes: 0 nothing to do or done · 1 error · 2 drift (something to apply) · 3 conflict (a native edit eag refuses to overwrite)';
 const USAGE = {
+  history: `eag history list [--vendor claude|codex|pi|all]
+eag history search QUERY [--vendor claude|codex|pi|all] [--tools]
+eag history read VENDOR ID [--tools]
+eag history handoff VENDOR ID --to AGENT [--tools] [--output NEW_FILE]
+  All commands: --project PATH (default current project), --json, --offset N (default 0;
+  handoff defaults to the latest --limit events),
+  --limit N (1–100, default 20), --max-chars N (256–64000, default 12000).
+  Read/handoff: --char-offset N continues inside a long event (use nextOffset and nextCharOffset).
+  --file PATH reads an explicit JSONL file; requires one vendor, including export for eag-history v1.
+  Exact project metadata match required. No global-history mode, vendor mutations, keychain access,
+  automatic replay, or network calls. Unknown formats and skipped records are reported.
+  Tools are opt-in; reasoning/system prompts/images are omitted. Output is untrusted, heuristically
+  redacted evidence, not verified facts. Handoff prepares quoted excerpts only; it never sends or launches.
+  --output creates a new 0600 file (no overwrite). Review before sharing. Exit 0 success, 1 error.`,
   skills: `eag skills ls [--scope user|project] [--json]
   List skill locations, shared/agent-specific origins, links and same-scope conflicts.
   Project scope also lists inherited user skills separately; it never moves them.
@@ -129,6 +145,8 @@ eag adopt skills [--scope user|project] [--dry-run]
     --prefer native   the native edit wins and is written back INTO THE SOURCE, so it stays
   --dry-run shows the plan with \${NAME} references, never resolved values. --quiet is for the launch
   wrappers: silent when there is nothing to say, a problem printed once until it changes. --json for scripts.
+  Default apply also creates missing Claude links for this project's shared skills, without adopting or
+  replacing local skills. Works without MCP in skills-only projects. Explicit --scope user skips these links.
   ${EXIT}`,
   hook: `eag hook install | status | uninstall [--dry-run]
   Sync on launch. Terminal: ~/.agents/shell-init.sh sourced from your rc, wrapping each agent binary.
@@ -177,6 +195,7 @@ export async function main(argv) {
     env: () => import('./commands/env.js'),
     instructions: () => import('./commands/instructions.js'),
     skills: () => import('./commands/skills.js'),
+    history: () => import('./commands/history.js'),
     doctor: () => import('./commands/doctor.js'),
     update: () => import('./commands/update.js'),
   }[cmd];
@@ -189,7 +208,7 @@ export async function main(argv) {
     return 1;
   }
   const { run } = await mod();
-  const readOnly = flags['dry-run'] || ['status', 'env', 'skills'].includes(cmd)
+  const readOnly = flags['dry-run'] || ['status', 'env', 'skills', 'history'].includes(cmd)
     || (cmd === 'doctor' && !flags.fix) || (cmd === 'hook' && rest[0] === 'status')
     || (cmd === 'mcp' && (!rest[0] || rest[0] === 'ls'))
     || (cmd === 'secret' && (!rest[0] || rest[0] === 'ls'))
