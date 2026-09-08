@@ -10,7 +10,7 @@ Acceptance checklist for the active hardening work. Items are complete only afte
 - [x] Make upgrades explicit; validate versions, prevent concurrent installations at the same npm prefix, and report installation outcomes.
 - [x] Review file permissions, backups, shell quoting, symlinks, and skill adoption failure paths.
 - [x] Provide reproducible integration fixtures and CI; update documentation to match actual guarantees and limits. Remote workflow execution is tracked in the release gate below.
-- [ ] Run regression tests, isolated end-to-end checks, package checks, and a final requirement-by-requirement review.
+- [x] Run regression tests, isolated end-to-end checks, package checks, and a final requirement-by-requirement review. Release evidence is recorded below; documented security limitations remain applicable.
 
 ## Verified progress (2026-09-07, unreleased worktree)
 
@@ -45,4 +45,8 @@ Acceptance checklist for the active hardening work. Items are complete only afte
 - npm audit reports zero known dependency vulnerabilities. This is not an independent security certification.
 - Package contents are limited to runtime code, shipped skill, README, changelog, license, and security documentation; no tests, local state, or credentials are packaged.
 - Mutation lock tests additionally cover replaced-lock preservation and expired asynchronous ownership. Explicit installs serialize at their npm prefix across EAG_HOME configurations.
-- Pending: final tarball after documentation changes, remote CI on the release commit, npm latest publication and read-back, GitHub release, and clean-worktree verification.
+- Final tarball SHA-1: `a3964c93d4ede954acba4f16f339c9939b18b20d`. npm registry read-back on 2026-09-08 matches this artifact and its SHA-512 integrity; `latest` is `0.10.0`.
+- All six macOS/Linux and Node 20/22/24 [CI jobs](https://github.com/tone-lotto/easy-agnostic/actions/runs/34163807081) passed on release commit `15a49bacef25e7902eedd5552cd1168e6d6320b9`.
+- Isolated real-Claude integration passed (`/tmp/eag-hardening-9PLose/e2e-live-final.log`). Installed final-tarball smoke was rerun successfully on 2026-09-08.
+- [GitHub v0.10.0](https://github.com/tone-lotto/easy-agnostic/releases/tag/v0.10.0) is published, not a draft; its remote tag resolves to the tested release commit. The release worktree was clean before this documentation-only audit update.
+- Upgrade migration: install 0.10.0, run `eag hook install`, and restart existing terminals to clear previously inherited credential exports. Security guarantees and remaining limitations are documented in SECURITY.md; passing checks do not constitute independent security certification.
