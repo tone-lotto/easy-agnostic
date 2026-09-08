@@ -28,7 +28,8 @@ Run `eag <command> --help` for every flag. Exit codes everywhere:
 | make every repo agnostic at once | `eag adopt claude --all-projects` |
 | check the wiring (hooks, trust, secrets, skills) | `eag doctor` (`--fix` repairs what is safe to repair) |
 | share project instructions in both directions | `eag instructions --dry-run`, then `eag instructions` |
-| share only this repo's skills | `eag adopt skills --scope project --dry-run`, then without `--dry-run` |
+| share one reviewed skill only in this repo | `eag skills share NAME --scope project --from codex --to codex,claude --compatible codex,claude --dry-run`, then without `--dry-run` after approval |
+| reconcile already approved skill links | `eag skills sync --scope project --dry-run`, then without `--dry-run` |
 | distinguish project skills from inherited user skills | `eag skills ls --scope project --json` |
 | resolve conflicting instruction files explicitly | `eag instructions --prefer agents` or `--prefer claude` |
 | find relevant prior conversations in this project | `eag history search "topic" --json` |
@@ -61,6 +62,9 @@ JSONL export with `--file` (see `eag history --help` and the project's history d
 
 ## Rules that keep you out of trouble
 
+- **Skill scope, compatibility and consent are separate.** Never share a skill merely because it is installed in another agent. Read its instructions, scripts and dependencies; confirm intended scope and targets before `skills share`. `--compatible` records reviewed agents, `--to` records allowed agents; both are mandatory, as is `--scope user|project`. Native skills and plugins stay with their provider. Unknown compatibility is not approval. `adopt skills` is now diagnostic-only.
+- **Skills use a neutral library, not a universally discovered folder.** `skills share NAME --from shared|claude|codex|pi` explicitly moves only the named source to the selected scope's `skill-library` and adjusts exact links to that source. The default `--from library` changes an enrolled skill's policy. Every call replaces the full policy: preserve intended dependencies with repeatable `--requires AGENT:SKILL`. EAG checks declared skill files, not arbitrary runtime tools or plugin availability. Do not bypass a missing dependency with a placeholder or invent compatibility.
+- **Changed skill content requires review again.** Sync removes only unchanged owned links when content approval or declared dependencies become invalid; the source stays in the library. Legacy `.agents/skills` content may remain visible to native agents until individually migrated. Unowned links and independent copies are never removed automatically. This is discovery control, not a filesystem sandbox. `--to none --compatible none` revokes an enrolled skill's managed links without deleting its source. See `eag skills --help` and packaged `docs/skills.md`.
 - **Never put a credential in `mcp.json`.** Write `${NAME}` and `eag secret set NAME`. `eag doctor` flags literals.
 - **A conflict is a stop, not an error.** `eag apply` exits 3 and names the entry. Read both sides
   (`eag status --json` shows `source` and `native`), then choose: `--prefer source` overwrites the native

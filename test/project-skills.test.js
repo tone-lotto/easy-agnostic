@@ -2,194 +2,103 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
-import { sandbox, write, read } from './helpers.js';
+import {spawnSync} from 'node:child_process';
+import {sandbox,write,read} from './helpers.js';
+const base=sandbox();
+const skills=await import('../src/skills.js');
+const {share,syncLinks,policyLocations}=await import('../src/skill-policy.js');
+const cli=path.resolve('bin/eag.js'); let serial=0;
+function fixture(){const root=path.join(base,`project-${serial++}`);fs.mkdirSync(root);const options={scope:'project',root};return {root,options,...policyLocations(options)};}
+const make=(dir,name,body=name)=>write(path.join(dir,name,'SKILL.md'),body);
+const approve=(p,name='demo')=>share(name,{...p.options,from:'codex',targets:['codex','claude'],compatible:['codex','claude']});
+const run=(p,...args)=>spawnSync(process.execPath,[cli,...args],{env:{...process.env,EAG_PROJECT:p.root,PATH:'/nonexistent',EAG_SHELL_RC:path.join(base,'rc')},encoding:'utf8',timeout:20000});
+test.after(()=>fs.rmSync(base,{recursive:true,force:true}));
 
-const base = sandbox();
-const skills = await import('../src/skills.js');
-const cli = path.resolve('bin/eag.js');
-let serial = 0;
-function project() {
-  const root = path.join(base, `project-${serial++}`); fs.mkdirSync(root);
-  const options = { scope: 'project', root };
-  return { root, options, ...skills.locations(options) };
-}
-const make = (dir, name, body = name) => write(path.join(dir, name, 'SKILL.md'), body);
-test.after(() => fs.rmSync(base, { recursive: true, force: true }));
-
-test('project adoption shares both agent sources, wires Claude, and leaves global skills intact', () => {
-  const p = project();
-  const global = make(skills.AGENT_DIRS.claude.dir, 'global-only', 'Global');
-  make(p.agents.claude.dir, 'local-claude'); make(p.agents.codex.dir, 'local-codex');
-  const plan = skills.plan(p.options);
-  skills.apply(plan, { ...p.options, dryRun: true });
-  assert.equal(fs.existsSync(p.shared), false);
-  skills.apply(plan, p.options);
-  for (const name of ['local-claude', 'local-codex']) {
-    assert.equal(read(path.join(p.shared, name, 'SKILL.md')), name);
-    assert.ok(fs.lstatSync(path.join(p.agents.claude.dir, name)).isSymbolicLink());
-    assert.equal(read(path.join(p.agents.claude.dir, name, 'SKILL.md')), name);
+test('project sharing never moves inherited user skills or writes global policy',()=>{
+  const p=fixture(); const global=make(skills.AGENT_DIRS.codex.dir,'global-only');make(p.agents.codex.dir,'demo');approve(p);
+  assert.equal(read(global),'global-only');assert.equal(fs.existsSync(path.join(skills.SHARED,'demo')),false);
+  assert.equal(fs.existsSync(path.join(process.env.EAG_HOME,'agents.json')),false);
+  assert.throws(()=>share('global-only',{...p.options,from:'codex',targets:['claude'],compatible:['claude']}),/SKILL/);
+});
+test('project inventory keeps origins and inherited same-name entries distinct',()=>{
+  const p=fixture();make(p.agents.codex.dir,'global-only');approve(p,'global-only');
+  const rows=skills.inventory(p.options);
+  assert.ok(rows.some(r=>r.name==='global-only'&&r.scope==='user'&&r.inherited));
+  assert.ok(rows.some(r=>r.name==='global-only'&&r.origin==='library'&&r.sameNameInUserScope));
+});
+test('all four project directory aliases are refused without changing global content',()=>{
+  for(const folder of ['.claude','.codex','.pi','.agents']){
+    const p=fixture(); const global=path.join(base,`global-${serial}`);fs.mkdirSync(global);fs.symlinkSync(global,path.join(p.root,folder));
+    assert.throws(()=>syncLinks(p.options),/symlinks|overlaps/);
+    assert.deepEqual(fs.readdirSync(global),[]);
   }
-  assert.equal(fs.existsSync(path.join(p.agents.codex.dir, 'local-codex')), false);
-  assert.equal(read(global), 'Global');
-  assert.equal(fs.existsSync(path.join(p.shared, 'global-only')), false);
-  assert.deepEqual(skills.plan(p.options), []);
 });
-
-test('different agent copies both remain in place on collision', () => {
-  const p = project();
-  const a = make(p.agents.claude.dir, 'clash', 'A'); const b = make(p.agents.codex.dir, 'clash', 'B');
-  const plan = skills.plan(p.options);
-  assert.ok(plan.every((i) => i.op === 'collision'));
-  skills.apply(plan, p.options);
-  assert.equal(read(a), 'A'); assert.equal(read(b), 'B');
-  assert.equal(fs.existsSync(p.shared), false);
+test('library, policy, and state symlink attacks are refused',()=>{
+  for(const key of ['library','policy','state']){
+    const p=fixture();make(p.agents.codex.dir,'demo');const outside=write(path.join(p.root,'external'),'untouched');fs.mkdirSync(path.dirname(p[key]),{recursive:true});fs.symlinkSync(outside,p[key]);
+    assert.throws(()=>approve(p),/symlinks/);assert.equal(read(outside),'untouched');
+  }
 });
-
-test('existing shared skills get links and identical local duplicates are removed', () => {
-  const p = project(); make(p.shared, 'existing'); make(p.agents.codex.dir, 'existing');
-  skills.apply(skills.plan(p.options), p.options);
-  assert.equal(read(path.join(p.agents.claude.dir, 'existing', 'SKILL.md')), 'existing');
-  assert.equal(fs.existsSync(path.join(p.agents.codex.dir, 'existing')), false);
+test('CLI requires explicit scope and compatibility; previews are read-only',()=>{
+  const p=fixture();make(p.agents.codex.dir,'demo');
+  const args=['skills','share','demo','--from','codex','--to','codex,claude','--compatible','codex,claude'];
+  assert.equal(run(p,...args).status,1);
+  assert.equal(run(p,...args,'--scope','project','--dry-run','--json').status,0);
+  assert.equal(fs.existsSync(p.library),false);
+  const changed=run(p,...args,'--scope','project','--json');assert.equal(changed.status,0,changed.stderr||changed.stdout);
+  const list=run(p,'skills','ls','--scope','project','--json');assert.equal(list.status,0,list.stderr);
+  assert.ok(JSON.parse(list.stdout).skills.some(s=>s.origin==='library'&&s.approval.targets.includes('claude')));
+  assert.equal(run(p,'skills','ls','--to','claude').status,1);
+  assert.equal(run(p,'skills','sync','--scope','invalid').status,1);
 });
-
-test('project inventory labels inherited skills and same-name entries without mutating them', () => {
-  const p = project(); make(p.shared, 'global-only', 'Project');
-  const rows = skills.inventory(p.options);
-  assert.ok(rows.some((r) => r.name === 'global-only' && r.scope === 'user' && r.inherited));
-  assert.ok(rows.some((r) => r.name === 'global-only' && r.scope === 'project' && !r.inherited && r.sameNameInUserScope));
-  assert.equal(fs.existsSync(p.agents.claude.dir), false);
+test('CLI dependency validation prevents writes and none revokes all owned links',()=>{
+  const p=fixture();make(p.agents.codex.dir,'demo');
+  const args=['skills','share','demo','--scope','project','--from','codex','--to','claude','--compatible','claude'];
+  assert.equal(run(p,...args,'--requires','claude:missing').status,1);assert.equal(fs.existsSync(p.library),false);
+  assert.equal(run(p,...args).status,0);
+  assert.equal(run(p,'skills','share','demo','--scope','project','--to','none','--compatible','none').status,0);
+  assert.equal(fs.existsSync(path.join(p.agents.claude.dir,'demo')),false);assert.equal(read(path.join(p.library,'demo','SKILL.md')),'demo');
 });
-
-test('symlinked project directories cannot move global skills', () => {
-  const p = project(); fs.symlinkSync(path.dirname(skills.AGENT_DIRS.claude.dir), path.join(p.root, '.claude'));
-  assert.throws(() => skills.plan(p.options), /symlinks|overlaps/);
-  assert.equal(read(path.join(skills.AGENT_DIRS.claude.dir, 'global-only', 'SKILL.md')), 'Global');
+test('legacy adopt CLI is diagnostic only, including dry-run',()=>{
+  const p=fixture();const file=make(p.agents.codex.dir,'demo');
+  for(const extra of [[],['--dry-run']])assert.equal(run(p,'adopt','skills','--scope','project',...extra).status,0);
+  assert.equal(read(file),'demo');assert.equal(fs.existsSync(p.library),false);assert.equal(fs.existsSync(p.shared),false);
 });
-
-test('a duplicate edited after planning is preserved', () => {
-  const p = project(); make(p.shared, 'duplicate'); const file = make(p.agents.codex.dir, 'duplicate');
-  const plan = skills.plan(p.options); write(file, 'Changed');
-  assert.throws(() => skills.apply(plan, p.options), /changed since planning/);
-  assert.equal(read(file), 'Changed');
+test('doctor --fix does not share unknown skills or deduplicate independent copies',()=>{
+  const p=fixture();const a=make(p.shared,'unknown');const b=make(p.agents.codex.dir,'unknown');
+  write(path.join(process.env.EAG_HOME,'mcp.json'),'{"mcpServers":{}}');
+  const result=run(p,'doctor','--fix','--scope','project','--json');assert.equal(result.status,0,result.stderr||result.stdout);
+  assert.equal(read(a),'unknown');assert.equal(read(b),'unknown');assert.equal(fs.existsSync(p.agents.claude.dir),false);
+  assert.ok(JSON.parse(result.stdout).checks.some(r=>r.level==='warn'&&r.msg.includes('unknown')));
 });
-
-test('project skills are not filtered by machine-wide curated names', () => {
-  const p = project();
-  write(path.join(process.env.CODEX_HOME, 'vendor_imports', 'skills-curated-cache.json'), '{"skills":[{"name":"custom"}]}');
-  make(p.agents.codex.dir, 'custom');
-  assert.ok(skills.plan(p.options).some((i) => i.name === 'custom' && i.op === 'adopt'));
+test('doctor repairs approved project links but leaves user links alone',()=>{
+  const p=fixture();make(p.agents.codex.dir,'demo');approve(p);fs.unlinkSync(path.join(p.agents.claude.dir,'demo'));
+  const global=make(skills.SHARED,'unreviewed-global');
+  const result=run(p,'doctor','--fix','--scope','project','--json');assert.equal(result.status,0,result.stderr||result.stdout);
+  assert.equal(read(path.join(p.agents.claude.dir,'demo','SKILL.md')),'demo');assert.equal(read(global),'unreviewed-global');assert.equal(fs.existsSync(path.join(skills.AGENT_DIRS.claude.dir,'unreviewed-global')),false);
 });
-
-test('CLI supports project scope, previews, JSON listing, and invalid scope rejection', () => {
-  const p = project(); make(p.agents.codex.dir, 'cli');
-  const run = (...args) => spawnSync(process.execPath, [cli, ...args], { env: { ...process.env, EAG_PROJECT: p.root }, encoding: 'utf8' });
-  assert.equal(run('adopt', 'skills', '--scope', 'project', '--dry-run').status, 0);
-  assert.equal(fs.existsSync(p.shared), false);
-  assert.equal(run('adopt', 'skills', '--scope', 'invalid').status, 1);
-  const applied = run('adopt', 'skills', '--scope', 'project');
-  assert.equal(applied.status, 0, applied.stderr);
-  const listed = run('skills', 'ls', '--scope', 'project', '--json');
-  assert.equal(listed.status, 0, listed.stderr);
-  assert.ok(JSON.parse(listed.stdout).skills.some((s) => s.name === 'cli' && s.origin === 'shared' && s.scope === 'project'));
-  assert.equal(run('skills', 'ls', '--scope', 'invalid', '--json').status, 1);
+test('launch apply repairs approved skills-only projects and honors explicit user scope',()=>{
+  const p=fixture();make(p.agents.codex.dir,'demo');approve(p);const link=path.join(p.agents.claude.dir,'demo');fs.unlinkSync(link);
+  assert.equal(run(p,'apply','--scope','user','--json').status,0);assert.equal(fs.existsSync(link),false);
+  const preview=run(p,'apply','--scope','project','--dry-run','--json');assert.equal(preview.status,0,preview.stderr||preview.stdout);assert.equal(fs.existsSync(link),false);
+  const applied=run(p,'apply','--scope','project','--json');assert.equal(applied.status,0,applied.stderr||applied.stdout);assert.equal(read(path.join(link,'SKILL.md')),'demo');
 });
-
-test('project-scoped doctor repairs project links without deduplicating global skills', () => {
-  const p = project(); make(p.shared, 'doctor-local');
-  make(skills.SHARED, 'doctor-global'); const global = make(skills.AGENT_DIRS.codex.dir, 'doctor-global');
-  write(path.join(process.env.EAG_HOME, 'mcp.json'), '{"mcpServers":{}}');
-  const r = spawnSync(process.execPath, [cli, 'doctor', '--fix', '--scope', 'project', '--json'], {
-    env: { ...process.env, EAG_PROJECT: p.root, EAG_SHELL_RC: path.join(base, 'rc'), PATH: '/nonexistent' },
-    encoding: 'utf8', timeout: 20000,
-  });
-  assert.equal(r.status, 0, r.stderr || r.stdout);
-  assert.equal(read(global), 'doctor-global');
-  assert.ok(fs.lstatSync(path.join(p.agents.claude.dir, 'doctor-local')).isSymbolicLink());
-  assert.equal(fs.existsSync(path.join(skills.AGENT_DIRS.claude.dir, 'doctor-global')), false);
+test('generated SessionStart launcher links only approved skills and never enrolls unknown ones',async()=>{
+  const {renderLauncher}=await import('../src/hooks.js');const p=fixture();make(p.agents.codex.dir,'demo');approve(p);make(p.shared,'unknown');fs.unlinkSync(path.join(p.agents.claude.dir,'demo'));
+  const binDir=path.join(p.root,'bin');write(path.join(binDir,'eag'),`import ${JSON.stringify(cli)};`);
+  const launcher=write(path.join(p.root,'eag-sync'),renderLauncher({entry:cli,binDir}));
+  const result=spawnSync('/bin/sh',[launcher],{cwd:p.root,env:{...process.env,EAG_PROJECT:p.root,PATH:'/nonexistent'},encoding:'utf8',timeout:20000});
+  assert.equal(result.status,0,result.stderr);assert.equal(result.stdout,'');assert.equal(read(path.join(p.agents.claude.dir,'demo','SKILL.md')),'demo');assert.equal(fs.existsSync(path.join(p.agents.claude.dir,'unknown')),false);
 });
-
-test('launch wiring creates only missing shared project links and is idempotent', () => {
-  const p = project(); make(p.shared, 'shared');
-  const privateFile = make(p.agents.codex.dir, 'private');
-  make(p.shared, 'collision'); const collision = make(p.agents.claude.dir, 'collision', 'different');
-  make(p.shared, 'broken'); fs.symlinkSync('missing-target', path.join(p.agents.claude.dir, 'broken'));
-  const preview = skills.syncProjectLinks({ root: p.root, dryRun: true });
-  assert.equal(fs.existsSync(path.join(p.agents.claude.dir, 'shared')), false);
-  assert.equal(preview.filter(r => r.op === 'conflict').length, 2);
-  skills.syncProjectLinks({ root: p.root });
-  assert.equal(read(path.join(p.agents.claude.dir, 'shared', 'SKILL.md')), 'shared');
-  assert.equal(read(collision), 'different');
-  assert.equal(read(privateFile), 'private');
-  assert.equal(fs.readlinkSync(path.join(p.agents.claude.dir, 'broken')), 'missing-target');
-  assert.equal(skills.syncProjectLinks({ root: p.root }).filter(r => r.op === 'link').length, 0);
-  assert.equal(fs.existsSync(path.join(skills.SHARED, 'shared')), false);
+test('orphaned links remain visible in inventory and doctor without retargeting',()=>{
+  const p=fixture();fs.mkdirSync(p.agents.claude.dir,{recursive:true});const link=path.join(p.agents.claude.dir,'orphan');fs.symlinkSync('gone',link);
+  const row=skills.inventory(p.options).find(r=>r.name==='orphan');assert.equal(row.broken,true);assert.equal(row.conflict,false);assert.equal(fs.readlinkSync(link),'gone');
 });
-
-test('launch wiring refuses project directory aliases of global skill locations', () => {
-  const p = project(); make(p.shared, 'safe');
-  fs.symlinkSync(path.dirname(skills.AGENT_DIRS.claude.dir), path.join(p.root, '.claude'));
-  assert.throws(() => skills.syncProjectLinks({ root: p.root }), /symlinks|overlaps/);
-  assert.equal(fs.existsSync(path.join(skills.AGENT_DIRS.claude.dir, 'safe')), false);
+test('same-name policy in another project cannot authorize a link',()=>{
+  const p=fixture(),q=fixture();make(p.agents.codex.dir,'demo');approve(p);make(q.shared,'demo');syncLinks(q.options);
+  assert.equal(fs.existsSync(q.agents.claude.dir),false);assert.equal(fs.existsSync(q.policy),false);
 });
-
-test('inventory exposes orphaned links even when the original shared skill is gone', () => {
-  const p = project(); fs.mkdirSync(p.agents.claude.dir, { recursive: true });
-  const link = path.join(p.agents.claude.dir, 'moved');
-  fs.symlinkSync('../../.agents/skills/moved', link);
-  const row = skills.inventory(p.options).find(r => r.name === 'moved');
-  assert.equal(row.broken, true); assert.equal(row.linked, true);
-  assert.equal(row.conflict, false);
-  assert.equal(fs.readlinkSync(link), '../../.agents/skills/moved');
-});
-
-test('default launch apply wires a skills-only project without MCP and preserves explicit user scope', () => {
-  const p = project(); make(p.shared, 'launch');
-  const emptyHome = path.join(base, 'empty-home'); fs.mkdirSync(emptyHome);
-  const run = (...args) => spawnSync(process.execPath, [cli, 'apply', ...args], {
-    env: { ...process.env, EAG_HOME: emptyHome, EAG_PROJECT: p.root, PATH: '/nonexistent' },
-    encoding: 'utf8', timeout: 20000,
-  });
-  assert.equal(run('--scope', 'user', '--json').status, 1);
-  assert.equal(fs.existsSync(p.agents.claude.dir), false);
-  const preview = run('--dry-run', '--json');
-  assert.equal(preview.status, 0, preview.stderr || preview.stdout);
-  assert.equal(JSON.parse(preview.stdout).skills[0].op, 'link');
-  assert.equal(fs.existsSync(p.agents.claude.dir), false);
-  const launch = run('--quiet');
-  assert.equal(launch.status, 0, launch.stderr || launch.stdout);
-  assert.equal(launch.stdout, '');
-  assert.equal(read(path.join(p.agents.claude.dir, 'launch', 'SKILL.md')), 'launch');
-  assert.equal(fs.existsSync(path.join(emptyHome, 'mcp.json')), false);
-  assert.deepEqual(JSON.parse(run('--json').stdout).skills, []);
-  make(p.shared, 'conflict'); make(p.agents.claude.dir, 'conflict', 'private');
-  const conflict = run('--json');
-  assert.equal(conflict.status, 3, conflict.stderr || conflict.stdout);
-  assert.equal(JSON.parse(conflict.stdout).skills[0].op, 'conflict');
-});
-
-test('generated SessionStart launcher wires shared project skills with no MCP source', async () => {
-  const { renderLauncher } = await import('../src/hooks.js');
-  const p = project(); make(p.shared, 'session-skill');
-  const emptyHome = path.join(p.root, 'user-state'); fs.mkdirSync(emptyHome);
-  const binDir = path.join(p.root, 'bin');
-  write(path.join(binDir, 'eag'), `import ${JSON.stringify(cli)};`);
-  const launcher = write(path.join(p.root, 'eag-sync'), renderLauncher({ entry: cli, binDir }));
-  const result = spawnSync('/bin/sh', [launcher], { cwd: p.root,
-    env: { ...process.env, EAG_PROJECT: p.root, EAG_HOME: emptyHome, PATH: '/nonexistent' },
-    encoding: 'utf8', timeout: 20000 });
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout, '');
-  assert.equal(read(path.join(p.agents.claude.dir, 'session-skill', 'SKILL.md')), 'session-skill');
-});
-
-test('doctor reports orphaned global skill links without retargeting them', () => {
-  const p = project();
-  const link = path.join(skills.AGENT_DIRS.claude.dir, 'orphan-diagnostic');
-  fs.mkdirSync(path.dirname(link), { recursive: true }); fs.symlinkSync('gone', link);
-  const result = spawnSync(process.execPath, [cli, 'doctor', '--scope', 'project', '--json'], {
-    env: { ...process.env, EAG_PROJECT: p.root, PATH: '/nonexistent' }, encoding: 'utf8', timeout: 20000,
-  });
-  assert.ok(JSON.parse(result.stdout).checks.some(r => r.level === 'warn' && r.msg.includes('orphan-diagnostic') && r.msg.includes('orphaned')));
-  assert.equal(fs.readlinkSync(link), 'gone');
+test('curated user skill names do not prevent independent project skills of the same name',()=>{
+  const p=fixture();write(path.join(process.env.CODEX_HOME,'vendor_imports','skills-curated-cache.json'),'{"skills":[{"name":"demo"}]}');make(p.agents.codex.dir,'demo');approve(p);
+  assert.ok(fs.existsSync(path.join(p.library,'demo','SKILL.md')));
 });

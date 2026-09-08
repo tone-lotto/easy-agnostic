@@ -11,7 +11,7 @@ import { refreshInit } from '../shell.js';
 import * as codex from '../adapters/codex.js';
 import { installSkill } from './hook.js';
 import { syncInstructions, instructionPaths } from '../instructions.js';
-import { syncProjectLinks } from '../skills.js';
+import { syncLinks } from '../skill-policy.js';
 
 // `--prefer native` used to record the native value only in the snapshot. The next plain
 // apply then saw state == native != source and called it "source changed", and overwrote
@@ -77,8 +77,9 @@ async function runApply(_args, flags) {
   const hasMcp = exists(scopePaths('user').mcp);
   // Default launch apply also wires this project's explicitly shared skills, like
   // enrolled instructions. An explicit --scope user opts out of project wiring.
-  const hasProjectSkills = flags.scope !== 'user' && exists(path.join(root, '.agents', 'skills')) && !scopePaths('project', root).collides;
-  if (!hasMcp && !exists(instructionPaths(root).state) && !hasProjectSkills) {
+  const hasProjectSkills = flags.scope !== 'user' && ['skills','skill-library'].some(dir => exists(path.join(root, '.agents', dir))) && !scopePaths('project', root).collides;
+  const hasUserSkills = flags.scope !== 'project' && ['skills','skill-library'].some(dir => exists(path.join(scopePaths('user').root, dir)));
+  if (!hasMcp && !exists(instructionPaths(root).state) && !hasProjectSkills && !hasUserSkills) {
     const msg = `${scopePaths('user').mcp} does not exist. Run: eag init (or eag setup)`;
     if (json) { process.stdout.write(`${JSON.stringify({ error: 'no source', hint: 'eag init' })}\n`); return 1; }
     process.stdout.write(`${c.bad('no source')} ${msg}\n`);
@@ -91,13 +92,14 @@ async function runApply(_args, flags) {
   let conflicts = 0;
   let errors = 0;
   let failures = 0;
-  if (hasProjectSkills) {
+  for (const skillScope of [...(hasUserSkills ? ['user'] : []), ...(hasProjectSkills ? ['project'] : [])]) {
     try {
-      const links = syncProjectLinks({ root, dryRun: dry });
-      if (json) json.skills = links;
+      const links = syncLinks({ scope: skillScope, root, dryRun: dry, target: only });
+      if (json) json.skills = [...(json.skills ?? []), ...links.map(link => ({...link, scope:skillScope}))];
       for (const link of links) {
         if (link.op === 'conflict') { conflicts++; tell(`skills: ${link.message}`); }
-        else say(`skills: ${dry ? 'would link' : 'linked'} ${link.name} into .claude/skills`);
+        else if (link.op === 'blocked') { if (json) json.warnings.push(link.message); tell(`skills: ${link.message}`); }
+        else say(`skills: ${dry ? 'would ' : ''}${link.op}: ${link.message}`);
       }
     } catch (e) {
       errors++;

@@ -1,18 +1,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
-import { withMutationLock } from './lock.js';
-import { EAG_HOME, CLAUDE_CONFIG_DIR, CODEX_HOME, projectRoot, scopePaths, assertProjectScope } from './paths.js';
+import { EAG_HOME, CLAUDE_CONFIG_DIR, CODEX_HOME, PI_AGENT_DIR, projectRoot, scopePaths, assertProjectScope, physicalPath } from './paths.js';
 import { exists, sameTree } from './util.js';
 
-// Skills flow outward from ~/.agents/skills: Codex reads that directory itself, doctor links
-// it into ~/.claude/skills. A skill that lives only in one agent's own directory never
-// reaches the other. This is the adopt step for skills — the same move `eag adopt claude`
-// makes for MCP servers: bring what an agent has into the shared source.
+// Inventory and scope boundaries. Legacy shared directories remain readable, but
+// only explicit policies in skill-policy.js may create cross-agent links.
 export const SHARED = path.join(EAG_HOME, 'skills');
 export const AGENT_DIRS = {
-  claude: { dir: path.join(CLAUDE_CONFIG_DIR, 'skills'), afterMove: 'link' },   // Claude needs the entry back as a link
-  codex: { dir: path.join(CODEX_HOME, 'skills'), afterMove: 'none' },           // Codex reads the shared dir directly
+  claude: { dir: path.join(CLAUDE_CONFIG_DIR, 'skills') },
+  codex: { dir: path.join(CODEX_HOME, 'skills') },
+  pi: { dir: path.join(PI_AGENT_DIR, 'skills') },
 };
 
 const present = (file) => { try { fs.lstatSync(file); return true; } catch (e) { if (e.code === 'ENOENT') return false; throw e; } };
@@ -26,15 +23,16 @@ export function locations({ scope = 'user', root = projectRoot() } = {}) {
   const globalDirs = [SHARED, ...Object.values(AGENT_DIRS).map((a) => a.dir)].map(physical);
   // A repository may link .claude or .agents to the user's home. Project adoption
   // must never follow that link and move machine-wide skills into the repo.
-  for (const folder of ['.agents', '.claude', '.codex']) {
+  for (const folder of ['.agents', '.claude', '.codex', '.pi']) {
     if (globalDirs.includes(physical(path.join(root, folder, 'skills')))) throw new Error('project skill scope overlaps a user skill directory');
     for (const file of [path.join(root, folder), path.join(root, folder, 'skills')]) {
       if (present(file) && fs.lstatSync(file).isSymbolicLink()) throw new Error(`${file}: project skill directories must not be symlinks`);
     }
   }
   return { shared: path.join(root, '.agents', 'skills'), agents: {
-    claude: { dir: path.join(root, '.claude', 'skills'), afterMove: 'link' },
-    codex: { dir: path.join(root, '.codex', 'skills'), afterMove: 'none' },
+    claude: { dir: path.join(root, '.claude', 'skills') },
+    codex: { dir: path.join(root, '.codex', 'skills') },
+    pi: { dir: path.join(root, '.pi', 'skills') },
   } };
 }
 
@@ -54,140 +52,20 @@ function nativeNames() {
   return out;
 }
 export function isNative(dir, name) {
+  if (name === 'eag' || ['.claude-plugin', '.codex-plugin'].some(m => present(path.join(dir, name, m)))) return true;
   if (name.startsWith('.')) return true;                                    // .system and the like
   if (exists(path.join(dir, name, '.eag-managed'))) return true;           // eag's own skill
   if (exists(path.join(dir, name, '.codex-managed')) || exists(path.join(dir, name, '.bundled'))) return true;
-  return nativeNames().has(name);
+  return physicalPath(dir) === physicalPath(AGENT_DIRS.codex.dir) && nativeNames().has(name);
 }
 
-function realSkills(dir, { scope = 'user' } = {}) {
-  if (!exists(dir)) return [];
-  return fs.readdirSync(dir).filter((n) => {
-    if (scope === 'user' ? isNative(dir, n) : n.startsWith('.') || ['.eag-managed', '.codex-managed', '.bundled'].some((m) => exists(path.join(dir, n, m)))) return false;
-    const p = path.join(dir, n);
-    try { const st = fs.lstatSync(p); return st.isDirectory() && !st.isSymbolicLink() && exists(path.join(p, 'SKILL.md')); } catch { return false; }
-  });
+export function apply(items) {
+  if (items.some(i => !['blocked', 'collision'].includes(i.op))) throw new Error('bulk skill adoption is disabled; use eag skills share NAME');
+  return [];
 }
 
-// One entry per (agent, skill) that is not yet in the shared directory.
-//   adopt      move it into ~/.agents/skills
-//   duplicate  identical to what is already shared (or to the other agent's copy): drop it
-//   collision  a DIFFERENT skill with the same name: report, never choose
 export function plan(options = {}) {
-  const { shared: sharedDir, agents } = locations(options);
-  const out = [];
-  const seen = new Map(); // name -> path already claimed for the shared dir in this plan
-  for (const [agent, { dir }] of Object.entries(agents)) {
-    for (const name of realSkills(dir, options)) {
-      const from = path.join(dir, name);
-      const shared = path.join(sharedDir, name);
-      if (present(shared) && fs.realpathSync(shared) === fs.realpathSync(from)) continue;
-      if (present(shared)) {
-        out.push({ agent, name, from, op: sameTree(shared, from) ? 'duplicate' : 'collision', against: shared });
-        continue;
-      }
-      const claimed = seen.get(name);
-      if (claimed) {
-        out.push({ agent, name, from, op: sameTree(claimed, from) ? 'duplicate' : 'collision', against: claimed });
-        continue;
-      }
-      seen.set(name, from);
-      out.push({ agent, name, from, op: 'adopt' });
-    }
-  }
-  // A collision has no winner in either scope, including the first copy encountered.
-  const clashes = new Set(out.filter((i) => i.op === 'collision').map((i) => i.name));
-  for (const it of out) if (clashes.has(it.name) && it.op !== 'collision') {
-    it.op = 'collision'; it.against = out.find((other) => other.name === it.name && other.from !== it.from)?.from;
-  }
-  if (options.scope === 'project') {
-    const names = new Set([...realSkills(sharedDir, options), ...out.filter((i) => i.op === 'adopt').map((i) => i.name)]);
-    for (const name of names) if (!clashes.has(name) && !present(path.join(agents.claude.dir, name))) {
-      out.push({ agent: 'claude', name, from: path.join(agents.claude.dir, name), op: 'link' });
-    }
-  }
-  return out;
-}
-
-export function apply(items, { dryRun = false, ...options } = {}) {
-  const execute = () => applyLocked(items, { dryRun, ...options });
-  return dryRun ? execute() : withMutationLock(execute);
-}
-
-// Launch-time wiring only: never adopt, move, delete, or replace agent-local skills.
-// Presence in the shared project directory is the user's choice to share a skill.
-export function syncProjectLinks({ root = projectRoot(), dryRun = false } = {}) {
-  const execute = () => {
-    const options = { scope: 'project', root };
-    const { shared, agents } = locations(options);
-    const results = [];
-    for (const name of realSkills(shared, options)) {
-      const from = path.join(agents.claude.dir, name);
-      const dest = path.join(shared, name);
-      if (present(from)) {
-        let target; try { target = fs.realpathSync(from); } catch { /* dangling link */ }
-        if (target === fs.realpathSync(dest) || sameTree(from, dest)) continue;
-        results.push({ name, op: 'conflict', message: `${name}: Claude skill path already exists; left untouched. Inspect ${from}` });
-        continue;
-      }
-      applyLocked([{ name, agent: 'claude', from, op: 'link' }], { ...options, dryRun });
-      results.push({ name, op: 'link', path: from });
-    }
-    return results;
-  };
-  return dryRun ? execute() : withMutationLock(execute);
-}
-
-function applyLocked(items, { dryRun, ...options }) {
-  const { shared: sharedDir, agents } = locations(options);
-  const done = [];
-  for (const it of items) {
-    if (it.op === 'collision') continue;
-    const dest = path.join(sharedDir, it.name);
-    if (!Object.hasOwn(agents, it.agent) || !it.name || it.name.startsWith('.') || path.basename(it.name) !== it.name || it.from !== path.join(agents[it.agent].dir, it.name)) throw new Error('invalid skill adoption plan');
-    if (it.op === 'adopt') {
-      if (!dryRun) {
-        if (present(dest) || !fs.lstatSync(it.from).isDirectory() || fs.lstatSync(it.from).isSymbolicLink()) throw new Error(`${it.name}: skill changed since planning; retry`);
-        fs.mkdirSync(sharedDir, { recursive: true });
-        fs.renameSync(it.from, dest);
-        if (agents[it.agent].afterMove === 'link') {
-          try { fs.symlinkSync(path.relative(path.dirname(it.from), dest), it.from); }
-          catch (e) {
-            if (!present(it.from)) fs.renameSync(dest, it.from);
-            else throw new Error(`${it.name}: link failed; original skill remains at ${dest}; source path was created concurrently`);
-            throw new Error(`${it.name}: link failed (${e.code || 'filesystem error'}); original skill restored`);
-          }
-        }
-      }
-      done.push({ ...it, dest });
-    } else if (it.op === 'duplicate') {
-      // The shared copy (or the one adopted from the other agent) is what stays.
-      if (!dryRun) {
-        if (fs.lstatSync(it.from).isSymbolicLink() || !sameTree(it.from, dest) || fs.realpathSync(it.from) === fs.realpathSync(dest)) throw new Error(`${it.name}: duplicate changed since planning; retry`);
-        // Stage the duplicate until replacement succeeds. A failed link must not turn
-        // a working agent-local skill into a missing directory.
-        const staged = path.join(path.dirname(it.from), `.eag-skill-${randomUUID()}`);
-        fs.renameSync(it.from, staged);
-        try {
-          if (agents[it.agent].afterMove === 'link') fs.symlinkSync(path.relative(path.dirname(it.from), dest), it.from);
-        } catch (e) {
-          if (!present(it.from)) fs.renameSync(staged, it.from);
-          else throw new Error(`${it.name}: link failed; recover the original skill from ${staged}; source path was created concurrently`);
-          throw new Error(`${it.name}: link failed (${e.code || 'filesystem error'}); duplicate restored`);
-        }
-        fs.rmSync(staged, { recursive: true });
-      }
-      done.push({ ...it, dest });
-    } else if (it.op === 'link') {
-      if (!dryRun) {
-        if (present(it.from) || !exists(path.join(dest, 'SKILL.md'))) throw new Error(`${it.name}: skill link changed since planning; retry`);
-        fs.mkdirSync(path.dirname(it.from), { recursive: true });
-        fs.symlinkSync(path.relative(path.dirname(it.from), dest), it.from);
-      }
-      done.push({ ...it, dest });
-    }
-  }
-  return done;
+  return inventory(options).filter(r => !r.inherited && r.origin !== 'library' && !r.linked && !isNative(path.dirname(r.path), r.name)).map(r => ({ name: r.name, agent: r.origin, from: r.path, op: 'blocked', message: 'explicit scope, targets and compatibility review required; use eag skills share' }));
 }
 
 export function inventory(options = {}) {
@@ -195,7 +73,7 @@ export function inventory(options = {}) {
   const sets = [{ scope, ...locations(options) }];
   if (scope === 'project') sets.push({ scope: 'user', ...locations({ scope: 'user' }) });
   const rows = [];
-  for (const set of sets) for (const [origin, dir] of [['shared', set.shared], ...Object.entries(set.agents).map(([agent, value]) => [agent, value.dir])]) {
+  for (const set of sets) for (const [origin, dir] of [['shared', set.shared], ['library', path.join(path.dirname(set.shared), 'skill-library')], ...Object.entries(set.agents).map(([agent, value]) => [agent, value.dir])]) {
     if (!exists(dir)) continue;
     for (const name of fs.readdirSync(dir).sort()) {
       if (name.startsWith('.')) continue;

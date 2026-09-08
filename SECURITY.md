@@ -17,6 +17,8 @@ Open a [security advisory](https://github.com/tone-lotto/easy-agnostic/security/
 
 ## Known limits
 
+- **Skill discovery is explicit, not an OS access boundary.** Personal skills require separate scope, target permission and compatibility review. Enrolled sources live outside native shared discovery directories, with content fingerprints and ownership-tracked links. Missing declared skill dependencies or changed content suspend owned links at the next sync; no source content is deleted. EAG does not execute skills to certify compatibility or infer every natural-language dependency. Native plugins, custom vendor discovery settings and already-running sessions remain outside its control. Legacy shared files/links are reported but require individual migration; upgrading alone does not make them private. See [skill isolation and recovery](docs/skills.md).
+
 - **Conversation history is opt-in, read-only and project-filtered.** `eag history` reads local
   vendor JSONL files without a background index, network calls or keychain access. It never
   replays commands or sends a handoff to another provider. Optional output files use exclusive

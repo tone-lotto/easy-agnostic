@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.12.0 — 2026-09-08
+
+- Stop automatic cross-agent skill adoption and deduplication. Setup, doctor and launch hooks no longer infer consent from an installed or shared-directory skill. Legacy `adopt skills` is diagnostic-only.
+- Add explicit `skills share` with mandatory scope, target authorization and reviewed compatibility, optional per-agent skill dependencies, and dry-run/JSON output. Store sources in a neutral `skill-library` and link only selected Claude, Codex or Pi destinations.
+- Fingerprint complete skill trees, suspend owned links after content changes or missing dependencies, and preserve sources for reapproval. Refuse native/plugin sources, internal links, path aliases, malformed policy and foreign destinations. Roll back ordinary failed migrations.
+- Add policy-aware `skills sync`, scoped apply/doctor reconciliation and individual legacy migration. Existing unreviewed links are reported, never silently removed or promoted across projects. Document discovery limits and upgrade steps.
+
 ## 0.11.0 — 2026-09-08
 
 - Add read-only, project-scoped `history list/search/read/handoff` for local Claude Code, Codex and Pi logs and explicit JSONL exports. Include redaction, source-line provenance, bounded pagination, opt-in tool results, and private local handoffs without network calls or automatic replay.

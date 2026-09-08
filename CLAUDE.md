@@ -33,7 +33,8 @@ src/source.js           load/save mcp.json + agents.json, validation, per-server
 src/secrets.js          keychain (macOS `security`), secret-tool (Linux), .secrets.env fallback
 src/state.js            last-apply snapshot per target (.state/<target>.json)
 src/projects.js         Claude's per-project "local" servers: discovery and skip reasons for adopt --all-projects
-src/skills.js           skills that only one agent has: plan (adopt/duplicate/collision) and the move into ~/.agents/skills
+src/skills.js           skill inventory, provider-native exclusions, user/project scope guards; legacy adoption is diagnostic-only
+src/skill-policy.js     explicit per-skill targets/compatibility/dependencies, neutral skill-library, content fingerprints and owned links
 src/update.js           install kind (global / npx / dev), throttled registry check, self-update; consumed by setup, apply, update, doctor
 src/shell.js            generated ~/.agents/shell-init.sh + rc wiring (terminal launches)
 src/hooks.js            ~/.agents/bin/eag-sync launcher + the agents' own session hooks (app/IDE launches)

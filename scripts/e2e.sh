@@ -351,15 +351,17 @@ printf -- '---\nname: e2e-claude-only\n---\nx\n' > "$CLAUDE_CONFIG_DIR/skills/e2
 printf -- '---\nname: e2e-codex-only\n---\nx\n' > "$CODEX_HOME/skills/e2e-codex-only/SKILL.md"
 printf -- '---\nname: e2e-clash\n---\nCLAUDE\n' > "$CLAUDE_CONFIG_DIR/skills/e2e-clash/SKILL.md"
 printf -- '---\nname: e2e-clash\n---\nCODEX\n' > "$CODEX_HOME/skills/e2e-clash/SKILL.md"
-set +e; A adopt skills > "$S/adopt-skills.txt" 2>&1; rc=$?; set -e
-[ "$rc" = 2 ] || { echo "FAIL: adopt skills with a name clash should exit 2, got $rc" >&2; cat "$S/adopt-skills.txt" >&2; exit 1; }
-[ -f "$EAG_HOME/skills/e2e-claude-only/SKILL.md" ] || { echo "FAIL: the Claude-only skill was not moved into the shared dir" >&2; exit 1; }
-[ -L "$CLAUDE_CONFIG_DIR/skills/e2e-claude-only" ] || { echo "FAIL: Claude was not left a link to the moved skill" >&2; exit 1; }
-[ -f "$EAG_HOME/skills/e2e-codex-only/SKILL.md" ] || { echo "FAIL: the Codex-only skill was not moved into the shared dir" >&2; exit 1; }
-[ -e "$CODEX_HOME/skills/e2e-codex-only" ] && { echo "FAIL: a copy was left under Codex, which would list the skill twice" >&2; exit 1; }
-grep -q 'clash  *e2e-clash' "$S/adopt-skills.txt" || { echo "FAIL: the name clash was not reported:" >&2; cat "$S/adopt-skills.txt" >&2; exit 1; }
+A adopt skills > "$S/adopt-skills.txt" 2>&1
+[ ! -e "$EAG_HOME/skills/e2e-claude-only" ] || { echo "FAIL: bulk adoption shared a private skill" >&2; exit 1; }
+A skills share e2e-claude-only --scope user --from claude --to claude --compatible claude >/dev/null
+A skills share e2e-codex-only --scope user --from codex --to codex,claude --compatible codex,claude >/dev/null
+[ -f "$EAG_HOME/skill-library/e2e-claude-only/SKILL.md" ] && [ -L "$CLAUDE_CONFIG_DIR/skills/e2e-claude-only" ] || { echo "FAIL: approved Claude skill missing" >&2; exit 1; }
+[ ! -e "$CODEX_HOME/skills/e2e-claude-only" ] && [ ! -e "$EAG_HOME/skills/e2e-claude-only" ] || { echo "FAIL: Claude-only skill leaked" >&2; exit 1; }
+[ -L "$CODEX_HOME/skills/e2e-codex-only" ] && [ -L "$CLAUDE_CONFIG_DIR/skills/e2e-codex-only" ] || { echo "FAIL: approved cross-agent links missing" >&2; exit 1; }
+set +e; A skills share e2e-clash --scope user --from codex --to codex,claude --compatible codex,claude > "$S/skill-clash.txt" 2>&1; rc=$?; set -e
+[ "$rc" = 1 ] || { echo "FAIL: conflicting private skill path was not refused" >&2; exit 1; }
 grep -q CODEX "$CODEX_HOME/skills/e2e-clash/SKILL.md" || { echo "FAIL: the clashing Codex skill was touched" >&2; exit 1; }
-rm -rf "$CLAUDE_CONFIG_DIR/skills/e2e-clash" "$CODEX_HOME/skills/e2e-clash" "$EAG_HOME/skills/e2e-clash"
+rm -rf "$CLAUDE_CONFIG_DIR/skills/e2e-clash" "$CODEX_HOME/skills/e2e-clash"
 
 # --- sync on launch: `eag hook` -------------------------------------------------------
 # The generated shell file has to be valid POSIX sh, wire the rc idempotently, and define a
@@ -501,12 +503,12 @@ printf '@AGENTS.md\n\nClaude-only instructions\n' > "$SETUP_S/proj/CLAUDE.md"
   A instructions --dry-run >/dev/null
   mkdir -p .codex/skills/project-demo
   printf -- '---\nname: project-demo\ndescription: Project fixture\n---\nProject-only instructions\n' > .codex/skills/project-demo/SKILL.md
-  A adopt skills --scope project --dry-run >/dev/null
+  A skills share project-demo --scope project --from codex --to codex,claude --compatible codex,claude --dry-run >/dev/null
   [ ! -e .agents/skills/project-demo ] || { echo "FAIL: project skills preview wrote files" >&2; exit 1; }
-  A adopt skills --scope project >/dev/null
-  [ -f .agents/skills/project-demo/SKILL.md ] && [ -L .claude/skills/project-demo ] || { echo "FAIL: project skill was not shared and linked" >&2; exit 1; }
+  A skills share project-demo --scope project --from codex --to codex,claude --compatible codex,claude >/dev/null
+  [ -f .agents/skill-library/project-demo/SKILL.md ] && [ -L .claude/skills/project-demo ] || { echo "FAIL: project skill was not shared and linked" >&2; exit 1; }
   [ ! -e "$EAG_HOME/skills/project-demo" ] || { echo "FAIL: project skill leaked into user scope" >&2; exit 1; }
-  A skills ls --scope project --json | node -e 'let text="";process.stdin.on("data",x=>text+=x);process.stdin.on("end",()=>{const rows=JSON.parse(text).skills;if(!rows.some(x=>x.name==="project-demo"&&x.scope==="project"&&x.origin==="shared"))process.exit(1)})'
+  A skills ls --scope project --json | node -e 'let text="";process.stdin.on("data",x=>text+=x);process.stdin.on("end",()=>{const rows=JSON.parse(text).skills;if(!rows.some(x=>x.name==="project-demo"&&x.scope==="project"&&x.origin==="library"))process.exit(1)})'
 )
 rm -rf "$SETUP_S"
 

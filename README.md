@@ -29,7 +29,7 @@ Node 20 or newer, macOS or Linux. One run per machine; safe to run again any tim
 | `2/8 adopt claude` | imports the servers Claude Code already has; credentials go to the OS keychain and become `${NAME}` |
 | `3/8 adopt codex` | same for Codex; a table another tool owns, or a ChatGPT app internal, stays Codex's and is not shared |
 | `4/8 apply` | writes the source into each agent through a 3-way merge |
-| `5/8 adopt skills` | a skill only one agent has moves to `~/.agents/skills`, where every agent reads it |
+| `5/8 adopt skills` | report skills needing review; never infer permission to share them |
 | `6/8 make projects agnostic` | per-repo servers Claude kept to itself become that repo's own `.mcp.json` |
 | `7/8 hook install` | sync on launch: a shell wrapper for terminal launches, a `SessionStart` hook for app/IDE launches, and eag's own skill so agents know how to drive it |
 | `8/8 doctor --fix` | wiring checks; repairs skill links and enables bidirectional instruction sync in the current project |
@@ -83,22 +83,34 @@ For on-demand conversation search and cross-agent handoffs, see [conversation hi
 `eag history search "topic"` finds local project evidence; `eag history handoff claude SESSION_ID --to codex`
 prepares quoted excerpts without sending them or running another agent.
 
+Skills are isolated by **scope, reviewed compatibility, and explicit target permission**.
+Installing a skill in one agent does not share it with another. Neither setup, doctor nor
+launch hooks enroll unknown skills.
+
 ```bash
-eag adopt skills --scope project --dry-run
-eag adopt skills --scope project
-eag skills ls --scope project
 eag skills ls --scope project --json
+# Review the skill and its dependencies first, then preview one explicit enrollment:
+eag skills share research --scope project --from codex \\
+  --to codex,claude --compatible codex,claude --dry-run
+# Repeat without --dry-run after approving the preview.
+eag skills sync --scope project --dry-run
 ```
 
-Project adoption moves skills from this repo's `.claude/skills` and `.codex/skills` into `.agents/skills`, and creates relative links in `.claude/skills`. Existing shared project skills get Claude links too. `eag setup --project` includes this step. Commit the skill directories and links to share them with collaborators.
+Sources move to `.agents/skill-library`, outside native shared discovery directories.
+EAG links only the selected agents; `--compatible` alone does not authorize sharing.
+Changed instructions/scripts require reapproval, and declared missing dependencies block
+links. Native/vendor skills and plugins stay with their provider. Independent copies and
+unowned/edited links are never overwritten or deduplicated.
 
-Default `eag apply` (including launch hooks) also creates missing Claude links for skills already in the current project's `.agents/skills`, even in skills-only projects with no MCP source. It never adopts agent-private skills or replaces existing paths; conflicting or broken destinations are reported for manual review. `--dry-run` previews the links, and explicit `--scope user` skips project skill wiring. Restart an already-open Claude Code session after repairing links; launch-time discovery is controlled by the agent, not eag.
+Legacy `.agents/skills` entries remain discoverable under native rules; EAG reports them
+but never guesses which agents should keep them. Migrate each reviewed skill explicitly
+with `skills share NAME --from shared --scope user|project --to AGENTS --compatible AGENTS`.
+The legacy `adopt skills` command is now diagnostic-only.
 
-`eag skills ls` includes `[broken link]` entries (JSON: `broken: true`), including orphaned global links left after a skill was moved. eag does not reconnect a global link to a project skill, because that would expose a project-only skill globally.
-
-Global skills are never moved into a project. Listing reports user-scope entries separately as inherited, identifies shared versus agent-specific locations, and flags same-scope conflicts and names also present globally. It is a filesystem inventory, not a guarantee of each running agent's discovery or precedence rules. Different project skills with the same name stay untouched; rename or reconcile them before adoption. Project directory symlinks that could redirect writes outside the repo are refused. The default for both commands remains `--scope user`.
-
-`eag doctor --fix --scope project` limits repairs to the project while still reporting global diagnostics. `setup --project` uses this scope automatically, so its doctor step does not change global skill directories.
+Mutations require explicit scope; project operations never move inherited user skills.
+`skills ls` reports origins, broken links, same-name conflicts, and configured approvals.
+`doctor --fix --scope project` repairs only approved project links while reporting global
+issues. See [skill policies, dependencies, migration and security limits](docs/skills.md).
 
 ## Bidirectional project instructions
 
@@ -161,7 +173,7 @@ Enrollment and the last synchronized content hash live under `~/.agents/.state/i
 
 ## For agents
 
-`eag` is meant to be driven by coding agents as much as by people, and ships its own skill: `eag hook install` links `skills/eag/SKILL.md` into `~/.agents/skills`, which Codex reads directly and `doctor` links into Claude Code. So an agent on a machine with eag installed knows the commands, the exit codes and the secret model without being told. For scripts: `--json` on `status`, `apply`, `doctor` and `mcp ls`; `eag <command> --help` for every flag; and exit codes that mean one thing each — `0` done · `1` error · `2` drift · `3` conflict.
+`eag` is meant to be driven by coding agents as much as by people, and ships its own skill: `eag hook install` links `skills/eag/SKILL.md` into `~/.agents/skills`, which Codex and Pi read directly; hook installation also links this one shipped skill into Claude Code. So an agent on a machine with eag installed knows the commands, the exit codes and the secret model without being told. For scripts: `--json` on `status`, `apply`, `doctor` and `mcp ls`; `eag <command> --help` for every flag; and exit codes that mean one thing each — `0` done · `1` error · `2` drift · `3` conflict.
 
 ## Daily use
 
@@ -257,7 +269,7 @@ Missing required credentials stop a wrapped launch; set the reported secret and 
 - Codex has no `${VAR}` expansion, so a reference it has no env-var field for is written as a literal value (eag warns). A `config.toml` eag creates, or one whose managed block ends up carrying such a literal, is written `0600`; otherwise the file keeps the permissions it had, and eag never widens them.
 - **A reference is only as good as the environment the agent starts in.** On macOS a desktop- or IDE-launched agent inherits the launchd environment, not terminal-wrapper credentials. That is why Claude Code gets resolved values by default. Terminal-only users can set `"claude": {"secrets": "env"}` in `agents.json` to preserve references; installed launch wrappers supply their values. Codex env-var pointers also need launch-time credentials. A SessionStart hook can sync configuration but cannot add environment variables to its already-running parent agent.
 - Keys Codex has no field for (e.g. Claude's `directTools`) are dropped for Codex and kept for Claude/Pi.
-- Skills are shared through `~/.agents/skills`: Codex reads it directly, `doctor --fix` links it into `~/.claude/skills`, and `eag adopt skills` moves a skill that only one agent has into it (Claude is left a link). Only skills you added move; what ships with a tool stays. Note that this is **Claude Code**'s skill directory — the CLI, the VS Code extension and the Claude Code panel in the desktop app. The desktop app's Settings → Skills page is the claude.ai account library, a separate cloud-side system eag does not touch. A copy of the same skill under `~/.codex/skills` makes Codex list it twice (`doctor --fix` removes an identical copy); two *different* skills sharing a name are reported and left alone.
+- Skills are shared only through explicit per-skill policies and a neutral library. Native/plugin skills and independent copies remain provider-owned. Legacy global links require individual review; upgrading does not automatically remove them. See [skill isolation](docs/skills.md).
 - `eag adopt` extracts credentials from headers and env only: a token embedded in a URL or in `args` stays in the source as is. `eag doctor` checks headers, env and the URL by shape, so it catches the common token formats and a `user:password@` URL, but it is a heuristic, not a guarantee.
 - A write failure for one entry (e.g. a name the `claude` CLI itself reserves) is reported (`failed   <name>: <reason>`) and skipped, not fatal to the rest of `apply`; a later run retries it.
 - No OAuth sharing yet: OAuth-backed remote servers (e.g. Supabase, Vercel, PostHog) still log in once per agent. A stdio wrapper (`eag run`) is the planned phase 2.

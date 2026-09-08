@@ -16,9 +16,12 @@ Usage: eag <command> [options]
   adopt <claude|codex> [--scope user|project] [--dry-run] [--force]
                                         import what an agent has today into the source
   adopt skills [--scope user|project] [--dry-run]
-                                        share skills within the selected scope
+                                        review legacy skills; never bulk-share
   skills ls [--scope user|project] [--json]
                                         list shared, agent-specific, and inherited user skills
+  skills share NAME --scope SCOPE --from ORIGIN --to AGENTS --compatible AGENTS
+                                        explicitly review and authorize one skill (see --help)
+  skills sync --scope user|project       reconcile only approved, EAG-owned skill links
   history list | search QUERY | read VENDOR ID | handoff VENDOR ID --to AGENT
                                         retrieve project-local conversation evidence on demand; never sends it
   adopt claude --all-projects [--dry-run] [--keep-local]
@@ -80,7 +83,7 @@ const COMMAND_FLAGS = {
   secret: ['value', 'from-env'],
   env: ['target'],
   instructions: ['dry-run', 'prefer', 'json'],
-  skills: ['scope', 'json'],
+  skills: ['scope', 'json', 'from', 'to', 'compatible', 'requires', 'dry-run'],
   history: ['project', 'vendor', 'file', 'to', 'output', 'offset', 'char-offset', 'limit', 'max-chars', 'tools', 'json'],
   doctor: ['fix', 'json', 'scope'],
   update: ['check', 'force'],
@@ -106,9 +109,19 @@ eag history handoff VENDOR ID --to AGENT [--tools] [--output NEW_FILE]
   redacted evidence, not verified facts. Handoff prepares quoted excerpts only; it never sends or launches.
   --output creates a new 0600 file (no overwrite). Review before sharing. Exit 0 success, 1 error.`,
   skills: `eag skills ls [--scope user|project] [--json]
-  List skill locations, shared/agent-specific origins, links and same-scope conflicts.
-  Project scope also lists inherited user skills separately; it never moves them.
-  Default scope: user. Listing is read-only; exit 1 for invalid input.`,
+eag skills share NAME --scope user|project [--from library|shared|claude|codex|pi]
+  --to AGENTS --compatible AGENTS [--requires AGENT:SKILL ...] [--dry-run] [--json]
+eag skills sync --scope user|project [--dry-run] [--json]
+  ls is read-only (default user); project listings separate inherited user skills.
+  share requires explicit scope, authorized targets and reviewed compatibility. AGENTS is a
+  comma-separated list of claude,codex,pi, or none. Default source: library (already enrolled).
+  --from selects ONE local source to move into the neutral .agents/skill-library, never a plugin.
+  Existing exact links to that source are migrated; unowned copies and other links are refused.
+  --requires declares required same-scope native skills; repeat for multiple dependencies.
+  Every share replaces the full policy, including dependencies. Content edits require reapproval.
+  sync reconciles only approved links, removing unchanged owned links when approval is invalid.
+  Unknown legacy shared skills are warned about, not moved or removed. No compatibility guessing.
+  Exit: share/ls 0 success, 1 error; sync 3 conflict, 2 blocked entries, 0 otherwise.`,
   instructions: `eag instructions [--dry-run] [--prefer agents|claude] [--json]
   Enable or sync mirrored AGENTS.md and CLAUDE.md at the current project root.
   Creates the missing counterpart on first use. Later edits flow in either direction.
@@ -129,11 +142,8 @@ eag adopt skills [--scope user|project] [--dry-run]
   replaced with \${NAME}. An entry already in the source with different content is kept (--force replaces it).
   --all-projects moves every per-project Claude server into that repo's own .mcp.json so Codex and Pi see it
   too; --keep-local leaves the original copy in ~/.claude.json.
-  'adopt skills' moves a skill that only one agent has (~/.claude/skills, ~/.codex/skills) into ~/.agents/skills,
-  which Codex reads directly and doctor links into Claude Code. Two different skills sharing a name are
-  reported and left alone (exit 2).
-  --scope project moves only .claude/skills and .codex/skills into .agents/skills in the current repo,
-  and creates Claude links. Global skills are never moved. Project skill directory symlinks are refused.`,
+  'adopt skills' is diagnostic-only: no skills are moved, linked or deduplicated.
+  Review one skill and use eag skills share with explicit scope, targets and compatibility.`,
   status: `eag status [--scope user|project|all] [--exit-code] [--quiet] [--json]
   Drift between the source, the last apply and each agent. --quiet hides in-sync and foreign entries.
   --exit-code makes the exit status meaningful for scripts. --json prints one object per target.
@@ -145,8 +155,8 @@ eag adopt skills [--scope user|project] [--dry-run]
     --prefer native   the native edit wins and is written back INTO THE SOURCE, so it stays
   --dry-run shows the plan with \${NAME} references, never resolved values. --quiet is for the launch
   wrappers: silent when there is nothing to say, a problem printed once until it changes. --json for scripts.
-  Default apply also creates missing Claude links for this project's shared skills, without adopting or
-  replacing local skills. Works without MCP in skills-only projects. Explicit --scope user skips these links.
+  Also reconciles reviewed skill policies within --scope and --target, without enrolling private or
+  legacy shared skills. Works without MCP in skills-only projects. Changed content requires reapproval.
   ${EXIT}`,
   hook: `eag hook install | status | uninstall [--dry-run]
   Sync on launch. Terminal: ~/.agents/shell-init.sh sourced from your rc, wrapping each agent binary.
@@ -173,8 +183,9 @@ eag secret ls | rm <NAME>
   doctor: `eag doctor [--fix] [--scope user|project|all] [--json]
   --scope limits repairs, not diagnostic reads; default all. Project scope never repairs global skills.
   Wiring checks: skills symlinks, instruction sync, Codex trust, Pi adapter, hook trust, secrets that are set but not
-  exported, projects only Claude can see, literal credentials in the source. --fix repairs symlinks, dedupes
-  identical skill copies and syncs AGENTS.md with CLAUDE.md bidirectionally. Exit 1 when there is a problem, 0 otherwise.`,
+  exported, projects only Claude can see, literal credentials in the source. --fix reconciles approved
+  skill links only and syncs AGENTS.md with CLAUDE.md bidirectionally. It never adopts unknown skills
+  or deduplicates private copies. Exit 1 when there is a problem, 0 otherwise.`,
 };
 
 export async function main(argv) {
@@ -208,7 +219,7 @@ export async function main(argv) {
     return 1;
   }
   const { run } = await mod();
-  const readOnly = flags['dry-run'] || ['status', 'env', 'skills', 'history'].includes(cmd)
+  const readOnly = flags['dry-run'] || ['status', 'env', 'history'].includes(cmd) || (cmd === 'skills' && rest[0] === 'ls')
     || (cmd === 'doctor' && !flags.fix) || (cmd === 'hook' && rest[0] === 'status')
     || (cmd === 'mcp' && (!rest[0] || rest[0] === 'ls'))
     || (cmd === 'secret' && (!rest[0] || rest[0] === 'ls'))

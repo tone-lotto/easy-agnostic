@@ -38,8 +38,7 @@ export async function run(_args, flags) {
   await step('2/8 adopt claude', () => adoptRun(['claude'], { scope }));
   await step('3/8 adopt codex', () => adoptRun(['codex'], { scope }));
   await step('4/8 apply', () => applyRun([], { scope }));
-  // Skills only flow outward from ~/.agents/skills; anything one agent keeps to itself is
-  // moved there so the others get it. A name clash is reported, never decided.
+  // Diagnostic only: setup is not permission to share every agent-private skill.
   await step('5/8 adopt skills', () => adoptRun(['skills'], { scope }));
   // The one place the promise does not hold on its own: servers Claude keeps per project in
   // ~/.claude.json, which no other agent can see. This writes inside repositories the user

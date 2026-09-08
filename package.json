@@ -1,6 +1,6 @@
 {
   "name": "easy-agnostic",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "Easy Agnostic: sync MCP servers, share skills, and sync project instructions bidirectionally across Claude Code, Codex and Pi.",
   "keywords": [
     "mcp",
@@ -32,6 +32,7 @@
     "src",
     "skills",
     "docs/history.md",
+    "docs/skills.md",
     "CHANGELOG.md",
     "SECURITY.md"
   ],

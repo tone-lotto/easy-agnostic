@@ -5,74 +5,19 @@ import { runCommand as execFileSync } from '../process.js';
 import { parse } from 'smol-toml';
 import { scopePaths, projectRoot, EAG_HOME, CLAUDE_CONFIG_DIR, CODEX_HOME } from '../paths.js';
 import { loadSource } from '../source.js';
-import { exists, readJson, refsIn, looksLikeSecret, mapStrings, sameTree, c } from '../util.js';
+import { exists, readJson, refsIn, looksLikeSecret, mapStrings, c } from '../util.js';
 import { resolveSecret, backendName } from '../secrets.js';
 import * as pi from '../adapters/pi.js';
 import * as shell from '../shell.js';
 import { migratable } from '../projects.js';
 import * as skillsMod from '../skills.js';
+import { syncLinks } from '../skill-policy.js';
 import { installKind, onPath, globalBinDir, VERSION } from '../update.js';
 import * as hooks from '../hooks.js';
 import * as claude from '../adapters/claude.js';
 import { syncInstructions } from '../instructions.js';
 
 const MARK = { ok: c.ok('✓'), warn: c.warn('!'), bad: c.bad('✗'), info: c.dim('·'), fixed: c.ok('✓ fixed') };
-
-function linkSkills(srcDir, dstDir, fix, out) {
-  if (!exists(srcDir)) return;
-  for (const name of fs.readdirSync(srcDir)) {
-    if (name.startsWith('.')) continue;
-    const src = path.join(srcDir, name);
-    // statSync follows the link: a dangling entry in the skills dir must be skipped, not
-    // throw out of the one command whose whole job is to report broken wiring.
-    let sst = null;
-    try { sst = fs.statSync(src); } catch { /* dangling symlink */ }
-    if (!sst?.isDirectory() || !exists(path.join(src, 'SKILL.md'))) continue;
-    const dst = path.join(dstDir, name);
-    let st = null;
-    try { st = fs.lstatSync(dst); } catch { /* missing */ }
-    if (st) {
-      if (st.isSymbolicLink()) {
-        let target = null; try { target = fs.realpathSync(dst); } catch { /* broken */ }
-        if (target === fs.realpathSync(src)) out.push({ level: 'ok', msg: `skill ${name} linked into ${dstDir}` });
-        else if (target === null) { if (fix) { fs.unlinkSync(dst); fs.symlinkSync(path.relative(dstDir, src), dst); out.push({ level: 'fixed', msg: `skill ${name}: replaced broken symlink` }); } else out.push({ level: 'warn', msg: `skill ${name}: broken symlink at ${dst} (--fix replaces it)` }); }
-        else out.push({ level: 'info', msg: `skill ${name}: ${dst} links elsewhere (${target}); left alone` });
-      } else if (sameTree(src, dst)) {
-        // The same skill, copied. Nothing is lost by replacing the copy with a link, and
-        // then editing the source reaches every agent instead of one.
-        if (fix) { fs.rmSync(dst, { recursive: true, force: true }); fs.symlinkSync(path.relative(dstDir, src), dst); out.push({ level: 'fixed', msg: `skill ${name}: replaced an identical copy at ${dst} with a link` }); }
-        else out.push({ level: 'info', msg: `skill ${name}: ${dst} is an identical copy of ${src} (--fix replaces it with a link)` });
-      } else {
-        // Two different skills with one name: each agent sees a different one, and eag
-        // cannot pick. Loud, because the summary counts warnings and this used to be silent.
-        out.push({ level: 'warn', msg: `skill ${name}: ${dst} is a DIFFERENT skill with the same name as ${src}. Each agent sees a different one; eag will not choose. Rename one, or delete the copy to use the shared one` });
-      }
-    } else if (fix) { fs.mkdirSync(dstDir, { recursive: true }); fs.symlinkSync(path.relative(dstDir, src), dst); out.push({ level: 'fixed', msg: `skill ${name}: linked ${dst} → ${src}` }); }
-    else out.push({ level: 'warn', msg: `skill ${name} in ${srcDir} is not visible to Claude Code (--fix creates the symlink)` });
-  }
-}
-
-// Codex reads ~/.agents/skills itself (verified: skills/list returns entries from there), so
-// a copy of the same skill under ~/.codex/skills makes Codex list it TWICE. An identical copy
-// can go; a different skill with the same name is a collision eag must not resolve.
-function dedupeSkills(srcDir, dupDir, fix, out, agent) {
-  if (!exists(srcDir) || !exists(dupDir)) return;
-  for (const name of fs.readdirSync(srcDir)) {
-    if (name.startsWith('.')) continue;
-    const src = path.join(srcDir, name);
-    const dup = path.join(dupDir, name);
-    let sst = null; let dst = null;
-    try { sst = fs.statSync(src); dst = fs.lstatSync(dup); } catch { continue; }
-    if (!sst.isDirectory() || !exists(path.join(src, 'SKILL.md'))) continue;
-    if (dst.isSymbolicLink()) continue; // someone linked it on purpose; not a copy
-    if (sameTree(src, dup)) {
-      if (fix) { fs.rmSync(dup, { recursive: true, force: true }); out.push({ level: 'fixed', msg: `skill ${name}: removed the identical copy at ${dup}; ${agent} reads ${srcDir} directly` }); }
-      else out.push({ level: 'info', msg: `skill ${name}: ${dup} is an identical copy; ${agent} already reads ${srcDir}, so it is listed twice (--fix removes the copy)` });
-    } else {
-      out.push({ level: 'warn', msg: `skill ${name}: ${dup} is a DIFFERENT skill with the same name as ${src}; ${agent} lists both. Rename one, or delete the copy to use the shared one` });
-    }
-  }
-}
 
 export async function run(_args, flags) {
   const fix = !!flags.fix;
@@ -185,13 +130,12 @@ async function checks(fix, root, out, scope) {
 
   // claude
   out.push(claude.available() ? { level: 'ok', msg: 'claude CLI available' } : { level: 'warn', msg: 'claude CLI not on PATH; user-scope apply needs it' });
-  linkSkills(path.join(EAG_HOME, 'skills'), path.join(CLAUDE_CONFIG_DIR, 'skills'), fix && scope !== 'project', out);
-  dedupeSkills(path.join(EAG_HOME, 'skills'), path.join(CODEX_HOME, 'skills'), fix && scope !== 'project', out, 'Codex');
-  // From $HOME the "project" .agents/skills IS the user's shared dir: linking it again from
-  // there reported every skill twice.
-  if (scope !== 'user' && !scopePaths('project', root).collides && exists(path.join(root, '.agents', 'skills'))) {
-    if (fix) skillsMod.locations({ scope: 'project', root });
-    linkSkills(path.join(root, '.agents', 'skills'), path.join(root, '.claude', 'skills'), fix, out);
+  for (const skillScope of ['user', 'project']) {
+    if (skillScope === 'project' && scopePaths('project', root).collides) continue;
+    const repairing = fix && (scope === 'all' || scope === skillScope);
+    for (const item of syncLinks({ scope: skillScope, root, dryRun: !repairing })) {
+      out.push({ level: item.op === 'conflict' ? 'warn' : item.op === 'blocked' ? 'warn' : repairing ? 'fixed' : 'warn', msg: `skills (${skillScope}): ${item.message}` });
+    }
   }
   const instructions = scope === 'user' ? { op: 'skipped' } : syncInstructions(root, { dryRun: !fix });
   if (instructions.op !== 'skipped') out.push({
@@ -210,11 +154,9 @@ async function checks(fix, root, out, scope) {
     catch { out.push({ level: 'warn', msg: 'codex CLI on PATH does not run (reinstall: npm install -g @openai/codex@latest); config is still written' }); }
   } else out.push({ level: 'info', msg: `codex not found at ${CODEX_HOME}` });
 
-  // Skills one agent keeps to itself. Codex reads ~/.agents/skills, Claude gets links from
-  // it; a skill that never got there is invisible to the other agent.
-  const agentOnly = skillsMod.plan().filter((i) => i.op === 'adopt');
-  if (agentOnly.length) out.push({ level: 'warn', msg: `${agentOnly.length} skill(s) only one agent has: ${agentOnly.map((i) => `${i.name} (${i.agent})`).join(', ')}. Run: eag adopt skills` });
-  for (const i of skillsMod.plan().filter((x) => x.op === 'collision')) out.push({ level: 'warn', msg: `skill ${i.name}: ${i.from} is a DIFFERENT skill from ${i.against}; each agent sees its own. Rename one` });
+  for (const item of skillsMod.plan({ scope: scope === 'project' ? 'project' : 'user', root })) {
+    out.push({ level: 'info', msg: `skill ${item.name}: agent-local or legacy shared; no automatic sharing. Review targets with eag skills share.` });
+  }
 
   // Projects whose servers only Claude can see: the one gap eag cannot close by syncing,
   // because the servers are not in any source yet.

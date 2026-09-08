@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { EAG_HOME } from '../paths.js';
+import { EAG_HOME, CLAUDE_CONFIG_DIR } from '../paths.js';
 import { exists, writeFileAtomic, c } from '../util.js';
 import * as shell from '../shell.js';
 import * as hooks from '../hooks.js';
@@ -28,11 +28,15 @@ export function installSkill({ dryRun = false } = {}) {
   if (st?.isSymbolicLink()) { if (!dryRun) fs.unlinkSync(SKILL_DST); st = null; } // an older eag linked it
   if (st && !exists(SKILL_MARK)) return { changed: false, shadowed: true };
   const cur = exists(path.join(SKILL_DST, 'SKILL.md')) ? fs.readFileSync(path.join(SKILL_DST, 'SKILL.md'), 'utf8') : null;
-  if (cur === want) return { changed: false };
+  // Installing eag explicitly includes its own portable skill, not other skills.
+  const link = path.join(CLAUDE_CONFIG_DIR, 'skills', 'eag');
+  let linkExists = false; try { fs.lstatSync(link); linkExists = true; } catch { /* missing */ }
+  if (cur === want && linkExists) return { changed: false };
   if (!dryRun) {
     fs.mkdirSync(SKILL_DST, { recursive: true });
     writeFileAtomic(path.join(SKILL_DST, 'SKILL.md'), want);
     fs.writeFileSync(SKILL_MARK, 'written by eag hook install; edits here are overwritten on the next refresh\n');
+    if (!linkExists) { fs.mkdirSync(path.dirname(link), { recursive: true }); fs.symlinkSync(path.relative(path.dirname(link), SKILL_DST), link); }
   }
   return { changed: true, created: cur === null };
 }

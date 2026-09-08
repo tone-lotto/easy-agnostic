@@ -195,22 +195,9 @@ async function allProjects(agent, flags) {
 // or ~/.codex/skills stays that agent's alone until it is moved here; then Codex reads it
 // directly and Claude keeps a link. Two different skills with one name are never merged.
 async function adoptSkills(flags) {
-  const dry = !!flags['dry-run'];
   const options = { scope: flags.scope || 'user', root: projectRoot() };
-  const { shared } = skills.locations(options);
   const items = skills.plan(options);
-  if (!items.length) { console.log('every skill is already shared; nothing to adopt'); return 0; }
-  const short = (p) => p.replace(os.homedir(), '~');
-  for (const it of items) {
-    if (it.op === 'adopt') console.log(`${c.ok('adopt  ')} ${it.name} ${c.dim(`${short(it.from)} → ${short(shared)}${it.agent === 'claude' ? ' (link left behind)' : ''}`)}`);
-    else if (it.op === 'link') console.log(`${c.ok('link   ')} ${it.name} ${c.dim(short(it.from))}`);
-    else if (it.op === 'duplicate') console.log(`${c.dim('same   ')} ${it.name} ${c.dim(`${short(it.from)} is identical to ${short(it.against)}; dropping the copy`)}`);
-    else console.log(`${c.warn('clash  ')} ${it.name}: ${short(it.from)} is a DIFFERENT skill from ${short(it.against)}. Rename one; eag will not choose`);
-  }
-  if (dry) { console.log(`\n${c.dim('dry run: nothing moved')}`); return 0; }
-  const done = skills.apply(items, options);
-  const clashes = items.filter((i) => i.op === 'collision').length;
-  console.log(`\n${done.filter((d) => d.op === 'adopt').length} skill(s) now shared, ${done.filter((d) => d.op === 'link').length} link(s) created, ${done.filter((d) => d.op === 'duplicate').length} duplicate(s) dropped${clashes ? `, ${c.warn(`${clashes} name clash(es) left alone`)}` : ''}`);
-  if (done.length) console.log(c.dim(options.scope === 'project' ? 'Project skills are shared in .agents/skills and linked into .claude/skills. Global skills were not moved.' : 'Codex reads ~/.agents/skills directly; run eag doctor --fix to link them into Claude Code.'));
-  return clashes ? 2 : 0;
+  for (const it of items) console.log(`review  ${it.name} (${it.agent}): ${it.message}`);
+  console.log('Bulk skill adoption is disabled. Nothing moved. Use eag skills share NAME --scope user|project --from AGENT --to AGENTS --compatible AGENTS after reviewing the skill.');
+  return 0;
 }
