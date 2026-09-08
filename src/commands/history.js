@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { context, discover, select, publicSession, load, page, NOTICE } from '../history/index.js';
 import { redactTranscript } from '../history/redact.js';
+import { VENDORS } from '../history/adapters.js';
+import { importHistory } from '../history/import.js';
 
 function integer(flags, key, fallback, min, max) {
   if (flags[key] === undefined) return fallback;
@@ -18,7 +20,8 @@ function validate(args, flags) {
   for (const key of ['project', 'vendor', 'file', 'to', 'output']) if (flags[key] !== undefined && (typeof flags[key] !== 'string' || !flags[key])) throw new Error(`--${key} needs one value.`);
   for (const key of ['json', 'tools']) if (flags[key] !== undefined && flags[key] !== true) throw new Error(`--${key} is a boolean flag.`);
   if (['read', 'handoff'].includes(command) && flags.vendor) throw new Error('For read/handoff, give the vendor as a positional argument.');
-  if (['read', 'handoff'].includes(command) && !['claude', 'codex', 'pi', 'export'].includes(args[1])) throw new Error('Read/handoff requires one explicit vendor: claude, codex, pi, or export.');
+  if (['read', 'handoff'].includes(command) && !VENDORS.includes(args[1])) throw new Error(`Read/handoff requires one explicit vendor: ${VENDORS.join(', ')}.`);
+  if (flags['bind-project'] || flags['dry-run']) throw new Error('--bind-project/--dry-run are only valid for history import');
   if (command !== 'handoff' && (flags.to || flags.output)) throw new Error('--to and --output are only valid for handoff.');
   if (['list', 'search'].includes(command) && flags['char-offset'] !== undefined) throw new Error('--char-offset is only valid for read/handoff.');
   if (command === 'handoff' && !/^[a-z][a-z0-9-]{0,63}$/.test(flags.to || '')) throw new Error('handoff requires --to AGENT (a name, not a command).');
@@ -39,6 +42,13 @@ export function renderHandoff(result) {
 }
 export async function run(args, flags) {
   try {
+    if (args[0] === 'import') {
+      for (const key of ['dry-run','bind-project','tools','json']) if (flags[key] !== undefined && flags[key] !== true) throw new Error(`--${key} is a boolean flag`);
+      if (args.length !== 2 || Object.keys(flags).some(k=>!['file','project','bind-project','tools','output','dry-run','json'].includes(k))) throw new Error('usage: eag history import cursor|antigravity|opencode --file FILE --project ABSOLUTE_PATH [--bind-project] [--tools] [--output NEW_FILE] [--dry-run] [--json]');
+      const result = importHistory(args[1],{file:flags.file,project:flags.project,bindProject:flags['bind-project'] === true,tools:flags.tools === true,output:flags.output,dryRun:flags['dry-run'] === true});
+      console.log(flags.json ? JSON.stringify(result,null,2) : `${result.dryRun ? 'Would import' : 'Imported'} ${result.events} visible events (${result.binding} project): ${result.output}. Nothing sent.`);
+      return 0;
+    }
     const command = validate(args, flags);
     const options = { offset: integer(flags, 'offset', 0, 0, 1000000), limit: integer(flags, 'limit', 20, 1, 100), maxChars: integer(flags, 'max-chars', 12000, 256, 64000), charOffset: integer(flags, 'char-offset', 0, 0, 32 * 1024 * 1024) };
     const ctx = context({ project: flags.project, vendor: ['read', 'handoff'].includes(command) ? args[1] : flags.vendor, file: flags.file });

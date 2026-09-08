@@ -1,6 +1,7 @@
 import { readJsonSnapshot, writeFileAtomic } from './util.js';
 import { assertProjectScope } from './paths.js';
 import { withMutationLock } from './lock.js';
+import { AGENTS } from './agents.js';
 
 export const DEFAULT_AGENTS = { targets: { claude: true, codex: true, pi: 'read-only' }, servers: {} };
 
@@ -70,6 +71,18 @@ export function targetEnabled(agents, agentId) {
   const v = agents?.targets?.[agentId];
   return v === true;
 }
+// Project policy overrides individual switches, not the entire per-server policy.
+// Defining one receiver must not erase a different receiver's inherited denial.
+export function mergeAgentPolicies(user, project = {}) {
+  const servers = Object.create(null);
+  for (const name of new Set([...Object.keys(user.servers ?? {}),...Object.keys(project.servers ?? {})])) {
+    const a = user.servers?.[name] ?? {}, b = project.servers?.[name] ?? {};
+    servers[name] = {...a,...b,targets:{...a.targets,...b.targets}};
+    for (const agent of AGENTS) if (a[agent] || b[agent]) servers[name][agent] = {...a[agent],...b[agent]};
+  }
+  return {...user,...project,targets:{...user.targets,...project.targets},servers,
+    ...Object.fromEntries(AGENTS.map(agent=>[agent,{...user[agent],...project[agent]}]))};
+}
 export function serverAllowed(agents, name, agentId) {
   const v = agents?.servers?.[name]?.targets?.[agentId];
   return v !== false;
@@ -119,15 +132,18 @@ export function validateAgents(agents) {
     if (v === undefined) return;
     if (!record(v)) { errors.push(`${label}: targets must be an object`); return; }
     for (const [key, value] of Object.entries(v)) {
-      if (!['claude', 'codex', 'pi'].includes(key) || (typeof value !== 'boolean' && !(key === 'pi' && value === 'read-only')) || (key === 'pi' && value === true)) errors.push(`${label}: invalid target switch`);
+      if (!AGENTS.includes(key) || (typeof value !== 'boolean' && !(key === 'pi' && value === 'read-only')) || (key === 'pi' && value === true)) errors.push(`${label}: invalid target switch`);
     }
   };
   targets(agents.targets, 'agents');
   if ('autoUpdate' in agents && typeof agents.autoUpdate !== 'boolean') errors.push('autoUpdate must be boolean (automatic updates are disabled)');
-  for (const key of ['claude', 'codex', 'pi']) {
+  for (const key of AGENTS) {
     if (!(key in agents)) continue;
     if (!record(agents[key])) errors.push(`${key}: policy must be an object`);
-    else mode(agents[key].secrets, key);
+    else {
+      mode(agents[key].secrets, key);
+      if (key === 'opencode' && agents[key].mcpFormat !== undefined && !['auto','v1','v2'].includes(agents[key].mcpFormat)) errors.push('opencode: mcpFormat must be auto, v1 or v2');
+    }
   }
   if ('servers' in agents) {
     if (!record(agents.servers)) errors.push('servers policy must be an object');
@@ -136,7 +152,7 @@ export function validateAgents(agents) {
       if (!/^[A-Za-z0-9_.-]+$/.test(name) || ['__proto__', 'constructor', 'prototype'].includes(name)) errors.push('invalid server policy name');
       targets(policy.targets, 'server policy');
       mode(policy.secrets, 'server policy');
-      for (const key of ['claude', 'codex', 'pi']) if (key in policy && !record(policy[key])) errors.push(`${key}: overrides must be an object`);
+      for (const key of AGENTS) if (key in policy && !record(policy[key])) errors.push(`${key}: overrides must be an object`);
     }
   }
   return errors;

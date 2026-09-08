@@ -9,6 +9,7 @@ import { printPlan, toJson } from './status.js';
 import { extractSecrets } from './adopt.js';
 import { refreshInit } from '../shell.js';
 import * as codex from '../adapters/codex.js';
+import { JSON_ADAPTERS } from '../adapters/registry.js';
 import { installSkill } from './hook.js';
 import { syncInstructions, instructionPaths } from '../instructions.js';
 import { syncLinks } from '../skill-policy.js';
@@ -25,7 +26,7 @@ function keepNativeInSource(plan, actions, { say }) {
   const src = loadSource(paths);
   const servers = { ...src.servers };
   for (const a of kept) {
-    const raw = plan.agent === 'codex' ? codex.toSource(a.native).entry : a.native;
+    const raw = JSON_ADAPTERS[plan.agent] ? JSON_ADAPTERS[plan.agent].toSource(a.native).entry : plan.agent === 'codex' ? codex.toSource(a.native).entry : a.native;
     const { entry, secrets } = extractSecrets(a.name, raw);
     for (const [sn, val] of secrets) if (resolveSecret(sn) === undefined) setSecret(sn, val);
     servers[a.name] = entry;
@@ -74,7 +75,7 @@ async function runApply(_args, flags) {
   const json = flags.json ? { targets: [], warnings: [] } : null;
   if (json) console.log = (...a) => { if (!json.captured) json.captured = []; json.captured.push(a.join(' ')); }; // never mix text into JSON
   // A missing source used to apply as "nothing", exit 0, which is the wrong kind of quiet.
-  const hasMcp = exists(scopePaths('user').mcp);
+  const hasMcp = exists(scopePaths('user').mcp) || (!scopePaths('project',root).collides && exists(scopePaths('project',root).mcp));
   // Default launch apply also wires this project's explicitly shared skills, like
   // enrolled instructions. An explicit --scope user opts out of project wiring.
   const hasProjectSkills = flags.scope !== 'user' && ['skills','skill-library'].some(dir => exists(path.join(root, '.agents', dir))) && !scopePaths('project', root).collides;

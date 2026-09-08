@@ -14,6 +14,9 @@ export function sandbox() {
   process.env.CODEX_HOME = path.join(dir, 'codex');
   process.env.CLAUDE_CONFIG_DIR = path.join(dir, 'cc');
   process.env.PI_CODING_AGENT_DIR = path.join(dir, 'pi');
+  process.env.CURSOR_CONFIG_DIR = path.join(dir,'cursor');
+  process.env.ANTIGRAVITY_CONFIG_DIR = path.join(dir,'antigravity');
+  process.env.OPENCODE_CONFIG_DIR = path.join(dir,'opencode');
   process.env.EAG_PROJECT = path.join(dir, 'proj');
   // Never touch the real keychain from a unit test.
   process.env.EAG_SECRET_BACKEND = 'file';

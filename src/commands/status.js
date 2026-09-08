@@ -59,7 +59,7 @@ export async function run(_args, flags) {
   let errors = false;
   const json = flags.json ? { targets: [], warnings: [] } : null;
   // A missing source used to read as "empty", and the summary said nothing was wrong.
-  const hasMcp = exists(scopePaths('user').mcp);
+  const hasMcp = exists(scopePaths('user').mcp) || (!scopePaths('project',root).collides && exists(scopePaths('project',root).mcp));
   if (!hasMcp && !exists(instructionPaths(root).state)) {
     if (json) { console.log(JSON.stringify({ error: 'no source', hint: 'eag init' })); return 1; }
     console.log(`${c.bad('no source')} ${scopePaths('user').mcp} does not exist. Run: ${c.bold('eag init')} (or eag setup)`);

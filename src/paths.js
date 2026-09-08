@@ -13,6 +13,9 @@ export const CLAUDE_JSON = process.env.CLAUDE_CONFIG_DIR
   : path.join(HOME, '.claude.json');
 export const CODEX_HOME = process.env.CODEX_HOME || path.join(HOME, '.codex');
 export const PI_AGENT_DIR = process.env.PI_CODING_AGENT_DIR || path.join(HOME, '.pi', 'agent');
+export const CURSOR_HOME = process.env.CURSOR_CONFIG_DIR || path.join(HOME, '.cursor');
+export const ANTIGRAVITY_HOME = process.env.ANTIGRAVITY_CONFIG_DIR || path.join(HOME, '.gemini', 'config');
+export const OPENCODE_HOME = process.env.OPENCODE_CONFIG_DIR || path.join(process.env.XDG_CONFIG_HOME || path.join(HOME, '.config'), 'opencode');
 
 // Resolve existing ancestors too: a missing config inside a linked directory is
 // still an alias of the destination where it would be created.

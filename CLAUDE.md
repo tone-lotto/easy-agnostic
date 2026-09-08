@@ -4,7 +4,7 @@ Guidance for Claude Code when working in this repository. Personal notes for the
 
 ## Project
 
-**Easy Agnostic** (`eag`) — one source, many agents. A CLI that keeps MCP servers in sync across Claude Code, Codex and Pi from a single source, never clobbers hand edits, and keeps secrets out of versioned files. It also wires shared skills and optionally mirrors project-root AGENTS.md and CLAUDE.md bidirectionally, with conflict protection.
+**Easy Agnostic** (`eag`) — one source, many agents. A CLI that keeps MCP servers in sync across Claude Code, Codex, Pi, Cursor, Antigravity and OpenCode from a single source, never clobbers hand edits, and keeps secrets out of versioned files. It also wires reviewed skills and optionally mirrors project-root AGENTS.md and CLAUDE.md bidirectionally, with conflict protection. New receivers require explicit enrollment; see docs/agents.md for versioned paths, discovery limits and export-only history.
 
 Status: v0 spike, open source (MIT), tested end to end in a sandbox. The principles, targets table and roadmap below are the design record; read them before changing architecture.
 
@@ -57,6 +57,8 @@ Adapter contracts differ per agent, and `src/plan.js` branches on `t.agent` for 
 
 Keep each adapter a single file so an upstream format change is a small PR.
 
+New JSON/JSONC targets share src/adapters/json-mcp.js and src/json-config.js. Provider-specific render/reverse mapping stays in one adapter file. JSONC edits preserve unrelated entries/comments, reject duplicate keys and aliases, and write private native files. Unlike the legacy Codex dotfiles behavior, these adapters refuse symlink/hardlink aliases rather than following them. OpenCode v2 is explicit for new files; existing v1/v2 shapes are detected. Antigravity rules import AGENTS.md without copying Claude-only text; activation remains native user consent.
+
 ## Targets and quirks already handled
 
 | Target | File | Write path | Quirks |
@@ -74,6 +76,7 @@ Two layers, and both must pass before any change to merge, adapters, plan or sec
 ```bash
 npm test                                        # unit tests; no agent, no keychain, no network
 npm run e2e                                     # committed fixtures, fake CLIs, no personal configs
+npm run e2e:package                             # real npm tarball install, isolated project workflows; registry access
 npm run e2e:live                                # optional real-native CLI run from config copies
 KEEP_SANDBOX=1 scripts/e2e.sh /tmp/eag-sandbox  # keep the sandbox for the manual scenarios; rm -rf it afterwards
 ```
@@ -115,7 +118,7 @@ eag is run by hooks and wrappers that have no PATH and live on after the thing t
 - **npx**: evictable cache, never on PATH. Never updated in place; `doctor` calls it a problem.
 - **dev** (a checkout under `npm link`, detected by a `.git` above the package): never overwritten by npm; `update` says to use git. This machine is one.
 - The launcher tries the installed `eag` (npm's global bin dir, baked in at install) before the package it was generated from, always through the resolved node. The shell file adds that bin dir to PATH before looking for `eag`.
-- Updates are explicit through `eag update`; routine apply and launch hooks never check the registry or install packages. Legacy `autoUpdate` settings do not re-enable automatic installs. Only exact stable versions are accepted and npm lifecycle scripts are disabled.
+- Updates default to explicit `eag update`. Separate user consent via `eag update auto on` enables a daily short-lived launch worker, staged validation and idle activation of same-line publisher-approved patches. `src/update-runtime.js` dispatches immutable runtimes; `src/auto-update.js` owns consent/staging. Never enable it in this linked checkout. Legacy `autoUpdate` does not grant consent. See `docs/updates.md` for compatibility declarations and release/recovery requirements; automatic patches must not broaden skills, MCP scope, credentials or hook trust.
 
 ## Agent operability
 
@@ -129,7 +132,7 @@ Four agents with no prior knowledge were given real tasks on a machine with eag 
 
 ## Conventions
 
-- Node >= 20, ESM, no build step, single dependency (`smol-toml`). Do not add a framework or a TypeScript toolchain for v0.
+- Node >= 20, ESM, no build step. Two small parser dependencies: `smol-toml` and pinned Microsoft `jsonc-parser` for comment-preserving native JSONC edits. Do not add a framework or a TypeScript toolchain for v0.
 - Keep CLI output terse and greppable; colours via `c` in `src/util.js`.
 - Exit codes: 0 clean, 1 errors, 2 drift, 3 conflict (`status --exit-code`, `apply`). Drift and conflict demand opposite reactions from a script, so they must never share a code again.
 - New agent = new file in `src/adapters/` plus an entry in `TARGETS` in `src/plan.js` (and, for now, a branch on `t.agent` in `buildPlan`/`applyPlan`). Do not special-case agents inside commands.

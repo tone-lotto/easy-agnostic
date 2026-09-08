@@ -55,5 +55,6 @@ export async function run(_args, flags) {
   await step('8/8 doctor --fix', () => doctorRun([], { fix: true, scope: scope === 'project' ? 'project' : 'all' }));
 
   console.log(`\n${ok ? c.ok('setup done') : c.warn('setup finished; see the warnings/errors above')}. ${c.dim('eag status')} shows drift any time, ${c.dim('eag mcp add')} to add a server.`);
+  if (scope === 'user') console.log('Automatic updates require separate consent: eag update auto on. Inspect with eag update status; disable with eag update auto off. Not supported in linked checkouts or npx.');
   return ok ? 0 : 1;
 }

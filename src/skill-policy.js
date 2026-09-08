@@ -5,8 +5,12 @@ import { locations, isNative } from './skills.js';
 import { projectRoot, physicalPath, CODEX_HOME } from './paths.js';
 import { withMutationLock } from './lock.js';
 import { exists, readJsonSnapshot, writeFileAtomic } from './util.js';
+import { AGENTS } from './agents.js';
+import { CURSOR_HOME, OPENCODE_HOME } from './paths.js';
+import { loadSource } from './source.js';
+import { scopePaths } from './paths.js';
 
-export const AGENTS = ['claude', 'codex', 'pi'];
+export { AGENTS };
 const record = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 const stat = p => { try { return fs.lstatSync(p); } catch (e) { if (e.code === 'ENOENT') return null; throw e; } };
 export const validName = n => typeof n === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(n) && !['constructor', 'prototype', '__proto__', 'synced', 'eag'].includes(n.toLowerCase());
@@ -14,6 +18,7 @@ const agentList = v => Array.isArray(v) && v.every(a => AGENTS.includes(a)) && n
 
 export function policyLocations(options) {
   const loc = structuredClone(locations(options));
+  loc.scope = options.scope ?? 'user'; loc.root = options.root ?? projectRoot();
   // Resolve OS aliases (/var, /tmp on macOS), but refuse aliases inside each scope.
   for (const key of ['shared']) loc[key] = path.join(physicalPath(path.dirname(loc[key])), path.basename(loc[key]));
   for (const a of AGENTS) loc.agents[a].dir = path.join(physicalPath(path.dirname(loc.agents[a].dir)), 'skills');
@@ -36,7 +41,7 @@ export function fingerprint(dir) {
     const s = fs.lstatSync(p);
     if (s.isSymbolicLink() || (!s.isDirectory() && (!s.isFile() || s.nlink !== 1))) throw new Error('skill contains a link or non-regular file');
     if (++files > 4096 || depth > 24 || (bytes += s.isFile() ? s.size : 0) > 32 * 1024 * 1024) throw new Error('skill exceeds review limits');
-    if (['.claude-plugin', '.codex-plugin', '.codex-managed', '.bundled', '.eag-managed'].includes(path.basename(p))) throw new Error('vendor-managed skill or plugin must stay with its provider');
+    if (['.claude-plugin', '.codex-plugin', '.cursor-plugin', '.opencode-plugin', '.antigravity-plugin', '.codex-managed', '.bundled', '.eag-managed'].includes(path.basename(p))) throw new Error('vendor-managed skill or plugin must stay with its provider');
     // Length-delimit content: file bytes must not impersonate the next entry's header.
     hash.update(JSON.stringify([rel, s.isDirectory() ? 'dir' : 'file', s.mode & 0o111, s.isFile() ? s.size : 0]) + '\n');
     if (s.isDirectory()) for (const n of fs.readdirSync(p).sort()) walk(path.join(p,n), `${rel}/${n}`, depth+1);
@@ -60,6 +65,29 @@ function load(loc) {
 export const readPolicies = options => load(policyLocations(options)).policy.value.skills ?? {};
 const matches = (file,dest) => stat(file)?.isSymbolicLink() && path.resolve(path.dirname(file),fs.readlinkSync(file)) === path.resolve(dest);
 
+// Compatibility discovery is a property of the receiving application, not a link
+// EAG can revoke. Never create an owned link that a known unapproved receiver sees.
+export function indirectConsumers(agent, loc) {
+  const user = loadSource(scopePaths('user')).agents;
+  const project = loc.scope === 'project' ? loadSource(scopePaths('project',loc.root)).agents : {};
+  const known = (id,dir) => exists(dir) || user.targets?.[id] === true || project.targets?.[id] === true || exists(path.dirname(loc.agents[id].dir));
+  return [
+    ...(['claude','codex'].includes(agent) && known('cursor',CURSOR_HOME) ? ['cursor'] : []),
+    ...(agent === 'claude' && known('opencode',OPENCODE_HOME) ? ['opencode'] : []),
+  ];
+}
+export function discoveryConsumers(skill, { root = projectRoot() } = {}) {
+  if (skill.origin === 'library' || skill.broken) return [];
+  // Shared is intentionally a multi-provider discovery location, even when the
+  // receiver has not yet been installed. This is exposure, not sharing approval.
+  if (skill.origin === 'shared') return ['codex','cursor','opencode',...(skill.scope === 'project' ? ['antigravity'] : [])];
+  return indirectConsumers(skill.origin,policyLocations({scope:skill.scope,root}));
+}
+function exposureReason(agent,loc,policy) {
+  const missing = indirectConsumers(agent,loc).filter(a => !policy.targets.includes(a) || !policy.compatible.includes(a));
+  return missing.length ? `also discoverable by ${missing.join(', ')}; explicit target permission and compatibility review required` : null;
+}
+
 function available(loc,name,agent,policies,stack) {
   const key = `${agent}:${name}`;
   if (stack.has(key)) return false;
@@ -75,6 +103,7 @@ function blocked(loc,name,agent,policies,stack = new Set()) {
   const p = policies[name];
   if (!p?.targets.includes(agent)) return 'not authorized';
   if (!p.compatible.includes(agent)) return 'compatibility not approved';
+  const exposure = exposureReason(agent,loc,p); if (exposure) return exposure;
   try { if (fingerprint(path.join(loc.library,name)) !== p.digest) return 'content changed; review and approve again'; } catch (e) { return e.message; }
   for (const dep of p.requires[agent] ?? []) if (!available(loc,dep,agent,policies,stack)) return `missing or unapproved dependency: ${dep}`;
   return null;
@@ -119,6 +148,7 @@ export function share(name,{scope,root=projectRoot(),from='library',targets,comp
   if (Object.values(requires).some(deps => deps.includes(name))) throw new Error('self-referencing dependency');
   const run = () => {
     const loc = policyLocations({scope,root}); guard(loc);
+    for (const a of targets) { const reason = exposureReason(a,loc,{targets,compatible}); if (reason) throw new Error(`${a}: ${reason}`); }
     if (!['library','shared',...AGENTS].includes(from)) throw new Error('--from must be library, shared, claude, codex or pi');
     const sourceDir = from === 'library' ? loc.library : from === 'shared' ? loc.shared : loc.agents[from].dir;
     const source = path.join(sourceDir,name), dest = path.join(loc.library,name);
@@ -167,7 +197,12 @@ export function syncLinks({scope='user',root=projectRoot(),dryRun=false,target=n
     for (const name of new Set([...Object.keys(policies),...Object.keys(state.links),...libraryNames])) {
       const dest = path.join(loc.library,name), owned = new Set(state.links[name] ?? []);
       for (const a of AGENTS) {
-        if (target && !target.includes(a)) continue;
+        if (target && !target.includes(a)) {
+          // A receiver launch must also revoke an owned link in another vendor's
+          // folder when that receiver would discover it without permission. Never
+          // create other vendors' links as a side effect of this safety check.
+          if (!owned.has(a) || !policies[name] || !exposureReason(a,loc,policies[name]) || !indirectConsumers(a,loc).some(id=>target.includes(id))) continue;
+        }
         const file = path.join(loc.agents[a].dir,name), reason = blocked(loc,name,a,policies);
         const present = stat(file), exact = matches(file,dest);
         if (present && (!owned.has(a) || !exact)) { result.push({name,agent:a,op:'conflict',message:`${name}: ${a} path is unowned or modified; left untouched`}); continue; }

@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { EAG_HOME } from './paths.js';
 import { exists, writeFileAtomic, backup, shellQuote } from './util.js';
+import { AGENT_BINS, NEW_AGENTS } from './agents.js';
 
 // eag writes into an agent's own config, so an agent that is already running reads whatever
 // was on disk when it started. The cheapest place to close that gap is the shell: every
@@ -13,7 +14,7 @@ export const BEGIN = '# >>> easy-agnostic >>>';
 export const END = '# <<< easy-agnostic <<<';
 
 // Pi reads the source itself, but still needs credentials scoped to its child process.
-export const AGENT_BINS = { claude: 'claude', codex: 'codex', pi: 'pi' };
+export { AGENT_BINS };
 
 function onPath(bin) {
   for (const dir of (process.env.PATH || '').split(path.delimiter)) {
@@ -45,7 +46,11 @@ export function render(bins = wrappableBins(), { binDir = null } = {}) {
     'if command -v eag >/dev/null 2>&1; then',
     ...(bins.length
       ? ['', '  __eag_sync() { command eag apply --quiet || true; }',
-         ...bins.map((b) => `  ${b}() ( ${b === 'pi' ? '' : '__eag_sync; '}set +x; set +v; __eag_exports=$(command eag env --target ${b}) || return $?; eval "$__eag_exports" || return $?; unset __eag_exports; command ${b} "$@"; )`)]
+         ...bins.map((b) => {
+           const agent = Object.keys(AGENT_BINS).find(a => AGENT_BINS[a] === b);
+           const sync = b === 'pi' ? '' : NEW_AGENTS.includes(agent) ? `command eag apply --scope all --target ${agent} --quiet || true; ` : '__eag_sync; ';
+           return `  ${b}() ( ${sync}set +x; set +v; __eag_exports=$(command eag env --target ${agent}) || return $?; eval "$__eag_exports" || return $?; unset __eag_exports; command ${b} "$@"; )`;
+         })]
       : ['', '  # no agent binary on PATH yet; install one and run `eag hook install`']),
     'fi',
     END,
@@ -116,7 +121,7 @@ export function writeInit(bins = wrappableBins(), { dryRun = false, binDir = nul
 export function binsInFile(file = INIT_FILE) {
   if (!exists(file)) return [];
   const out = [];
-  for (const m of fs.readFileSync(file, 'utf8').matchAll(/^ {2}([A-Za-z0-9_-]+)\(\) [({] /gm)) if (Object.hasOwn(AGENT_BINS, m[1])) out.push(m[1]);
+  for (const m of fs.readFileSync(file, 'utf8').matchAll(/^ {2}([A-Za-z0-9_-]+)\(\) [({] /gm)) if (Object.values(AGENT_BINS).includes(m[1])) out.push(m[1]);
   return out;
 }
 

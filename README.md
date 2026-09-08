@@ -1,8 +1,8 @@
 # Easy Agnostic (`eag`): one source, many agents
 
-Keep MCP servers, shared skills, and project instructions in sync across **Claude Code**, **Codex** and **Pi**, with conflict protection and credentials stored by reference.
+Keep MCP servers, reviewed skills, and project instructions in sync across Claude Code, Codex, Pi, Cursor, Antigravity and OpenCode, with conflict protection and credentials stored by reference.
 
-Status: v0 spike. Targets: Claude Code (user scope via `claude mcp`, project scope is native), Codex (managed block in `config.toml`, user + project), Pi (reads the source directly through `pi-mcp-adapter`, nothing to write).
+Status: pre-1.0. Cursor, Antigravity and OpenCode are opt-in, with user/project MCP adapters, per-agent skill destinations and separately installed hooks. History for these three uses explicitly imported local exports, not private database scraping. See the [support matrix and enrollment guide](docs/agents.md) for paths, version profiles and native approval limits.
 
 ## Setup
 
@@ -41,7 +41,7 @@ It prints every file it touches. The whole thing takes about ten seconds.
 1. **Open a new terminal.** A shell that was already open does not re-read its rc, so the secrets are not exported in it yet. `doctor` says so until you do.
 2. **Approve the Codex hook, once.** Codex will not run a hook it has not been told to trust, and says nothing when it skips one — so eag keeps telling you. Open Codex and run `/hooks` (terminal) or go to Settings → Hooks (ChatGPT app), and approve. Each repo that gets a `.codex/config.toml` also needs to be trusted inside Codex once; `eag doctor` in the repo says which.
 
-After that there is nothing to remember: every agent launch syncs, and every launch checks for a newer eag at most once a day and installs it in the background.
+Supported wrappers sync before launch; app hooks depend on native trust and session reload. Automatic updates are off until separate consent with `eag update auto on`; only compatible same-line updates qualify. See [update policy](docs/updates.md).
 
 ### Check it worked
 
@@ -58,7 +58,21 @@ cd my-repo
 eag setup --project           # this repo's .mcp.json → every agent, in this repo only
 ```
 
-The generated `.codex/config.toml` holds only this repo's own servers (Codex merges them with your user config) and can contain literal values where Codex has no env-var field, so keep it out of git: `eag init --project` appends `.agents/.state/` and `.codex/config.toml` to an existing `.gitignore` (in a fresh repo, create the file with both lines).
+Generated MCP files hold only the selected scope's servers and may contain literal credentials. `eag init --project` adds the managed native MCP paths and `.agents/.state/` to an existing `.gitignore`, or tells you which entries to add. Git ignores do not untrack an already committed file; rotate any credential already exposed.
+
+### Add Cursor, Antigravity or OpenCode
+
+Run in the intended project, replacing `cursor` with the desired agent:
+
+```bash
+eag agents enable cursor --scope project --dry-run
+eag agents enable cursor --scope project
+eag apply --scope project --target cursor --dry-run
+eag apply --scope project --target cursor
+eag hook install --target cursor --scope project
+```
+
+Use `--scope user` only for machine-wide servers. Skills require their own `skills share` approval. For launch aliases, use `eag run cursor --binary agent -- [arguments]`. Consult [agents.md](docs/agents.md) before enabling version-specific formats or importing history.
 
 ### The steps, one at a time
 
@@ -256,7 +270,9 @@ Missing required credentials stop a wrapped launch; set the reported secret and 
 
 ## Staying up to date
 
-`npx easy-agnostic setup` installs eag globally on its first run, because everything that syncs on launch needs a stable `eag` on PATH — the npx cache is neither stable nor on PATH. Updates are explicit: `eag update` installs the latest stable version with npm lifecycle scripts disabled; `eag update --check` only looks. Routine `apply` and agent launches never check for or install updates, even if an older configuration has `"autoUpdate": true`.
+`npx easy-agnostic setup` installs eag globally on its first run, because everything that syncs on launch needs a stable `eag` on PATH — the npx cache is neither stable nor on PATH. `eag update` explicitly installs the latest stable version with npm lifecycle scripts disabled; `eag update --check` only looks.
+
+Automatic updates are **off by default**. Starting with 0.13.0, users of global installs can explicitly run `eag update auto on` once. Successful sync/credential launches then trigger a daily background check, stage and validate compatible patches in a separate directory, and activate only when EAG operations are idle. No new skill/MCP permissions or hook trust are granted. `eag update status` shows progress; `eag update auto off` stops future updates. Linked checkouts and npx are excluded; legacy `"autoUpdate": true` is ignored. Existing users must manually upgrade once to obtain this feature. See [consent, compatibility and recovery](docs/updates.md).
 
 
 ## Environment

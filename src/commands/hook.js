@@ -8,6 +8,9 @@ import * as claude from '../adapters/claude.js';
 import { CODEX_HOME } from '../paths.js';
 import { fileURLToPath } from 'node:url';
 import { globalBinDir } from '../update.js';
+import { providerHook } from '../provider-hooks.js';
+import { NEW_AGENTS } from '../agents.js';
+import { projectRoot } from '../paths.js';
 
 // eag ships its own skill. Copied into ~/.agents/skills it reaches every agent: Codex reads
 // that directory itself, doctor links it into ~/.claude/skills. That is how an agent that was
@@ -51,7 +54,7 @@ async function codexTrustLine(indent = '  ') {
 }
 
 const backupDir = () => path.join(EAG_HOME, '.state', 'backup');
-const GUI_NOTE = 'The shell covers what you start from a terminal; the session hook covers what you\nstart from a desktop app or an IDE. Together they are every launch path there is.';
+const GUI_NOTE = 'Shell wrappers sync before supported terminal launches. Claude/Codex SessionStart hooks\ncover their app launches. Cursor, Antigravity and OpenCode need separate --target/--scope enrollment.\nNative hook trust and configuration reload remain controlled by the receiving agent.';
 
 async function status() {
   const st = shell.rcState();
@@ -82,6 +85,15 @@ async function status() {
 export async function run(args, flags) {
   const sub = args[0] || 'status';
   const dry = !!flags['dry-run'];
+  if (flags.target !== undefined) {
+    if (args.length > 1) throw new Error('provider hook accepts one subcommand');
+    for (const key of ['dry-run','json']) if (flags[key] !== undefined && flags[key] !== true) throw new Error(`--${key} is a boolean flag`);
+    if (!NEW_AGENTS.includes(flags.target) || !['user','project'].includes(flags.scope)) throw new Error('provider hook requires --target cursor|antigravity|opencode --scope user|project');
+    const result = providerHook(flags.target,{scope:flags.scope,root:projectRoot(),command:sub,dryRun:dry});
+    console.log(flags.json ? JSON.stringify(result,null,2) : `${result.agent}: ${result.file} — ${result.dryRun ? 'dry run' : result.changed ? sub : result.current ? 'configured' : 'not configured/current'}; ${result.execution}`);
+    return sub === 'status' && !result.current ? 2 : 0;
+  }
+  if (flags.scope || flags.json) throw new Error('--scope/--json require an explicit provider --target');
 
   if (sub === 'status') return status();
 

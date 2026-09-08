@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { EAG_HOME, CLAUDE_CONFIG_DIR, CODEX_HOME, PI_AGENT_DIR, projectRoot, scopePaths, assertProjectScope, physicalPath } from './paths.js';
+import { EAG_HOME, CLAUDE_CONFIG_DIR, CODEX_HOME, PI_AGENT_DIR, CURSOR_HOME, ANTIGRAVITY_HOME, OPENCODE_HOME, projectRoot, scopePaths, assertProjectScope, physicalPath } from './paths.js';
 import { exists, sameTree } from './util.js';
 
 // Inventory and scope boundaries. Legacy shared directories remain readable, but
@@ -10,6 +10,9 @@ export const AGENT_DIRS = {
   claude: { dir: path.join(CLAUDE_CONFIG_DIR, 'skills') },
   codex: { dir: path.join(CODEX_HOME, 'skills') },
   pi: { dir: path.join(PI_AGENT_DIR, 'skills') },
+  cursor: { dir:path.join(CURSOR_HOME,'skills') },
+  antigravity: { dir:path.join(ANTIGRAVITY_HOME,'skills') },
+  opencode: { dir:path.join(OPENCODE_HOME,'skills') },
 };
 
 const present = (file) => { try { fs.lstatSync(file); return true; } catch (e) { if (e.code === 'ENOENT') return false; throw e; } };
@@ -23,7 +26,7 @@ export function locations({ scope = 'user', root = projectRoot() } = {}) {
   const globalDirs = [SHARED, ...Object.values(AGENT_DIRS).map((a) => a.dir)].map(physical);
   // A repository may link .claude or .agents to the user's home. Project adoption
   // must never follow that link and move machine-wide skills into the repo.
-  for (const folder of ['.agents', '.claude', '.codex', '.pi']) {
+  for (const folder of ['.agents', '.claude', '.codex', '.pi', '.cursor', '.agent', '.opencode']) {
     if (globalDirs.includes(physical(path.join(root, folder, 'skills')))) throw new Error('project skill scope overlaps a user skill directory');
     for (const file of [path.join(root, folder), path.join(root, folder, 'skills')]) {
       if (present(file) && fs.lstatSync(file).isSymbolicLink()) throw new Error(`${file}: project skill directories must not be symlinks`);
@@ -33,6 +36,9 @@ export function locations({ scope = 'user', root = projectRoot() } = {}) {
     claude: { dir: path.join(root, '.claude', 'skills') },
     codex: { dir: path.join(root, '.codex', 'skills') },
     pi: { dir: path.join(root, '.pi', 'skills') },
+    cursor: { dir:path.join(root,'.cursor','skills') },
+    antigravity: { dir:path.join(root,'.agent','skills') },
+    opencode: { dir:path.join(root,'.opencode','skills') },
   } };
 }
 
@@ -52,7 +58,7 @@ function nativeNames() {
   return out;
 }
 export function isNative(dir, name) {
-  if (name === 'eag' || ['.claude-plugin', '.codex-plugin'].some(m => present(path.join(dir, name, m)))) return true;
+  if (name === 'eag' || ['.claude-plugin', '.codex-plugin', '.cursor-plugin', '.opencode-plugin', '.antigravity-plugin'].some(m => present(path.join(dir, name, m)))) return true;
   if (name.startsWith('.')) return true;                                    // .system and the like
   if (exists(path.join(dir, name, '.eag-managed'))) return true;           // eag's own skill
   if (exists(path.join(dir, name, '.codex-managed')) || exists(path.join(dir, name, '.bundled'))) return true;

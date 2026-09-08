@@ -1,8 +1,15 @@
 # On-demand conversation history
 
 `eag history` retrieves local conversation evidence for the current project. It does not run a
-vendor SDK, start an agent, call an API, build a global index, copy vendor histories, or read
+vendor SDK, start an agent, call an API, build a global index, bulk-copy vendor histories, or read
 credentials from the keychain. Nothing runs automatically at agent startup.
+
+Claude/Codex/Pi have native local log discovery. Cursor/Antigravity/OpenCode use explicit local
+export import: `eag history import VENDOR --file FILE --project /absolute/repo --dry-run`, then
+without dry-run. See [supported formats and enrollment](agents.md#local-history-only-on-demand).
+Without recorded project metadata, `--bind-project` is a separate user attestation; it is never
+inferred from the current directory and cannot override contradictory recorded metadata.
+Imports create private normalized receipts under EAG_HOME, not writes to vendor histories.
 
 ## Search, inspect, hand off
 

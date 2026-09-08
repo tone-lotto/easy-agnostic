@@ -11,7 +11,10 @@ import * as pi from '../adapters/pi.js';
 import * as shell from '../shell.js';
 import { migratable } from '../projects.js';
 import * as skillsMod from '../skills.js';
-import { syncLinks } from '../skill-policy.js';
+import { syncLinks, discoveryConsumers } from '../skill-policy.js';
+import { JSON_ADAPTERS } from '../adapters/registry.js';
+import { providerHook } from '../provider-hooks.js';
+import { instructionRule } from '../instruction-rule.js';
 import { installKind, onPath, globalBinDir, VERSION } from '../update.js';
 import * as hooks from '../hooks.js';
 import * as claude from '../adapters/claude.js';
@@ -54,6 +57,19 @@ async function checks(fix, root, out, scope) {
   // source there, and reading it as one would report the user's file twice.
   const projPaths = scopePaths('project', root);
   const proj = projPaths.collides ? { hasMcp: false, servers: {}, paths: projPaths } : loadSource(projPaths);
+  for (const [agent,adapter] of Object.entries(JSON_ADAPTERS)) for (const sc of ['user','project']) {
+    if (sc === 'project' && projPaths.collides) continue;
+    try {
+      const native = adapter.read(sc,root);
+      if (native.text !== null) out.push({level:'ok',msg:`${agent} (${sc}): native MCP configuration parses (${native.servers.size} entries); runtime authentication not verified`});
+      const h = providerHook(agent,{scope:sc,root});
+      if (h.installed) out.push({level:h.current ? 'info' : 'warn',msg:`${agent} (${sc}) hook: ${h.current ? 'configured' : 'modified/stale'}; ${h.execution}`});
+    } catch (e) { out.push({level:'bad',msg:`${agent} (${sc}): ${e.message}`}); }
+  }
+  if (!projPaths.collides) {
+    const rule = instructionRule(root,{status:true});
+    if (rule.installed) out.push({level:rule.current && rule.owned ? 'info' : 'warn',msg:`Antigravity instructions: ${rule.current && rule.owned ? rule.activation : 'unowned or modified rule; preserved'}`});
+  }
   if (proj.hasMcp) out.push({ level: 'ok', msg: `project source: ${proj.paths.mcp} (${Object.keys(proj.servers).length} servers)` });
   for (const s of [user, proj]) {
     if (!s.hasMcp) continue;
@@ -133,6 +149,10 @@ async function checks(fix, root, out, scope) {
   for (const skillScope of ['user', 'project']) {
     if (skillScope === 'project' && scopePaths('project', root).collides) continue;
     const repairing = fix && (scope === 'all' || scope === skillScope);
+    for (const s of skillsMod.inventory({scope:skillScope,root}).filter(s=>!s.inherited && s.name !== 'eag')) {
+      const receivers = discoveryConsumers(s,{root});
+      if (receivers.length) out.push({level:'warn',msg:`skill ${s.name} (${skillScope}/${s.origin}): native discovery also exposes this path to ${receivers.join(', ')}; EAG does not remove unowned native files or change provider discovery settings`});
+    }
     for (const item of syncLinks({ scope: skillScope, root, dryRun: !repairing })) {
       out.push({ level: item.op === 'conflict' ? 'warn' : item.op === 'blocked' ? 'warn' : repairing ? 'fixed' : 'warn', msg: `skills (${skillScope}): ${item.message}` });
     }

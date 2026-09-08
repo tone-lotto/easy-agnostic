@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { CLAUDE_CONFIG_DIR, CODEX_HOME, PI_AGENT_DIR, physicalPath, projectRoot } from '../paths.js';
+import { EAG_HOME, CLAUDE_CONFIG_DIR, CODEX_HOME, PI_AGENT_DIR, physicalPath, projectRoot } from '../paths.js';
+import { NEW_AGENTS } from '../agents.js';
 import { VENDORS, metadata, events } from './adapters.js';
 import { redactTranscript } from './redact.js';
 
@@ -13,7 +14,7 @@ const MAX_SCAN = 128 * 1024 * 1024;
 const ID = /^[A-Za-z0-9_-]{1,128}$/;
 
 export function stores() {
-  return { claude: [path.join(CLAUDE_CONFIG_DIR, 'projects')], codex: [path.join(CODEX_HOME, 'sessions'), path.join(CODEX_HOME, 'archived_sessions')], pi: [path.join(PI_AGENT_DIR, 'sessions')] };
+  return { claude: [path.join(CLAUDE_CONFIG_DIR, 'projects')], codex: [path.join(CODEX_HOME, 'sessions'), path.join(CODEX_HOME, 'archived_sessions')], pi: [path.join(PI_AGENT_DIR, 'sessions')],...Object.fromEntries(NEW_AGENTS.map(a=>[a,[path.join(EAG_HOME,'.state','history',a)]])) };
 }
 const safe = value => redactTranscript(value).slice(0,1000);
 function parseLines(text, complete, warnings) {
@@ -68,20 +69,21 @@ export function context({ project = projectRoot(), vendor = 'all', file } = {}) 
   if (typeof project !== 'string' || !project) throw new Error('--project needs a directory path.');
   const root = physicalPath(project);
   if (fs.existsSync(root) && !fs.statSync(root).isDirectory()) throw new Error('--project must be a directory.');
-  if (vendor !== 'all' && !VENDORS.includes(vendor)) throw new Error('Vendor must be claude, codex, pi, export, or all.');
+  if (vendor !== 'all' && !VENDORS.includes(vendor)) throw new Error(`Vendor must be ${VENDORS.join(', ')}, or all.`);
   if (file && (typeof file !== 'string' || vendor === 'all')) throw new Error('--file requires an explicit vendor.');
   if (vendor === 'export' && !file) throw new Error('The export adapter requires --file.');
   return { project: root, vendor, file, warnings: new Set(), budget: { bytes: 0, headerBytes: 0, dirs: 0, entries: 0, deadline: Date.now() + 15000 } };
 }
 export function discover(ctx) {
   const found = [];
+  if (NEW_AGENTS.includes(ctx.vendor) && !ctx.file) ctx.warnings.add('This vendor uses explicitly imported local exports, not private application databases. Use eag history import after exporting the selected conversation.');
   const inspect = (vendor, file, base) => {
     try {
       const prefix = read(file, base, true, ctx.budget);
       const meta = metadata(vendor, parseLines(prefix.text, prefix.complete, new Set()));
       if (!validMeta(meta)) { ctx.warnings.add('Some files had no supported session metadata in the first 256 KiB and were skipped.'); return; }
       if (!sameProject(meta.cwd, ctx.project)) return;
-      found.push({ vendor, id: meta.id, project: ctx.project, timestamp: typeof meta.timestamp === 'string' ? safe(meta.timestamp) : null, file, base, bytes: prefix.stat.size, modified: prefix.stat.mtime.toISOString() });
+      found.push({ vendor, id: meta.id, project: ctx.project, timestamp: typeof meta.timestamp === 'string' ? safe(meta.timestamp) : null, file, base, bytes: prefix.stat.size, modified: prefix.stat.mtime.toISOString(),...(NEW_AGENTS.includes(vendor) ? {binding:meta.binding,sourceSha256:meta.sourceSha256} : {}) });
     } catch (e) { if (ctx.file) throw e; ctx.warnings.add(safe(e.message)); }
   };
   if (ctx.file) {
@@ -124,6 +126,7 @@ export function load(ctx, session, { tools = false } = {}) {
   const data = read(session.file, session.base, false, ctx.budget);
   const records = parseLines(data.text, data.complete, ctx.warnings);
   const meta = metadata(session.vendor, records);
+  if (meta?.binding === 'user-attested') ctx.warnings.add('Project association was explicitly attested during import, not recorded by the provider.');
   if (!validMeta(meta) || meta.id !== session.id || !sameProject(meta.cwd, ctx.project)) throw new Error('Session metadata changed or does not match the selected project.');
   if (records.some(record => { const other = metadata(session.vendor, [record]); return other && other.id !== session.id; })) throw new Error('Transcript contains mixed session identities; select an unmixed export.');
   const normalized = events(session.vendor, records, { tools });

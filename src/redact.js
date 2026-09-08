@@ -21,13 +21,13 @@ export function redactUrl(value) {
 export function redactConfig(value, pairs = []) {
   const input = redactKnown(value, [...pairs].sort((a, b) => (b[1]?.length || 0) - (a[1]?.length || 0)));
   function walk(v, key = '') {
-    if (Array.isArray(v)) return key === 'args' ? v.map(privateValue) : v.map((x) => walk(x));
+    if (Array.isArray(v)) return ['args','command'].includes(key) ? v.map(privateValue) : v.map((x) => walk(x));
     if (v && typeof v === 'object') {
-      if (['env', 'headers', 'http_headers'].includes(key)) return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, privateValue(x)]));
+      if (['env', 'environment', 'headers', 'http_headers'].includes(key)) return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, privateValue(x)]));
       return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x, k)]));
     }
     if (typeof v !== 'string') return v;
-    if (key === 'url') return redactUrl(v);
+    if (['url','serverUrl'].includes(key)) return redactUrl(v);
     if (/(?:token|password|secret|credential|authorization|api[_-]?key)/i.test(key) && !key.endsWith('_env_var')) return privateValue(v);
     return looksLikeSecret(v) ? privateValue(v) : v;
   }
@@ -37,13 +37,13 @@ export function redactConfig(value, pairs = []) {
 // Permission decisions cannot rely only on token length/prefix heuristics: a short
 // header or environment value is still potentially a password.
 export function containsSensitiveLiteral(value, key = '') {
-  if (Array.isArray(value)) return key === 'args' ? value.some((v) => !reference(v)) : value.some((v) => containsSensitiveLiteral(v));
+  if (Array.isArray(value)) return ['args','command'].includes(key) ? value.some((v) => !reference(v)) : value.some((v) => containsSensitiveLiteral(v));
   if (value && typeof value === 'object') {
-    if (['env', 'headers', 'http_headers'].includes(key)) return Object.values(value).some((v) => !reference(v));
+    if (['env', 'environment', 'headers', 'http_headers'].includes(key)) return Object.values(value).some((v) => !reference(v));
     return Object.entries(value).some(([k, v]) => containsSensitiveLiteral(v, k));
   }
   if (typeof value !== 'string' || reference(value)) return false;
-  if (key === 'url' && redactUrl(value) !== value) return true;
+  if (['url','serverUrl'].includes(key) && redactUrl(value) !== value) return true;
   return (/(?:token|password|secret|credential|authorization|api[_-]?key)/i.test(key) && !key.endsWith('_env_var')) || looksLikeSecret(value);
 }
 

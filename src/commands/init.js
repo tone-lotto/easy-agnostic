@@ -34,7 +34,7 @@ export async function run(_args, flags) {
     // Both can carry literal credentials: the snapshots/backups under .state, and the
     // generated Codex file (repeats user servers; literals where Codex has no env-ref field).
     const gi = path.join(paths.root, '.gitignore');
-    const lines = ['.agents/.state/', '.codex/config.toml'];
+    const lines = ['.agents/.state/', '.codex/config.toml', '.cursor/mcp.json', '.agents/mcp_config.json', 'opencode.json', 'opencode.jsonc'];
     if (exists(gi)) {
       const text = fs.readFileSync(gi, 'utf8');
       const have = text.split(/\r?\n/).map((l) => l.trim());

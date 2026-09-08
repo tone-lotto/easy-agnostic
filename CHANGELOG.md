@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.13.0 — 2026-09-08
+
+- Harden final integration review: preserve inherited per-server restrictions, report effective enrollment, isolate provider hook workspace variables and user/project destinations, reject unknown Cursor hook schemas, and roll back JSON/plugin writes when ownership recording fails without replacing concurrent edits.
+- Run installed-tarball integration tests in CI as well as checkout tests, including all three new adapters/hooks, instruction bridging and project-filtered history.
+
+- Add opt-in Cursor, Antigravity and OpenCode MCP adapters for both scopes, explicit `agents enable|disable`, native adoption, reversible secret references, conflict protection and JSONC-preserving private writes. Detect existing OpenCode v1/v2 layouts; select a new v2 file with `--mcp-format v2`.
+- Add per-agent skill destinations and fail-closed approval checks for known native cross-discovery. Inventory and doctor explain indirect exposure without modifying unowned native skills.
+- Add separately enrolled provider hooks/plugins, launch-scoped credentials and `eag run` for explicit binary aliases. Antigravity gets an owned project rule importing AGENTS.md, with activation left to its native UI.
+- Add private Cursor/Antigravity/OpenCode history import from supported local exports. Exact project metadata is required unless the user explicitly attests an unbound export; conflicting recorded projects cannot be rebound. No vendor database scraping, automatic capture, transmission or replay.
+
+- Add explicit user-level `update auto on|off` consent and local `update status --json`. Default off; project policy and legacy automatic-update settings do not authorize installation. Linked checkouts and npx are excluded.
+- Launch a short-lived daily worker after successful apply/env, with fixed-registry SHA-512 archive verification, isolated staged npm installation without lifecycle scripts, package/tree validation and smoke tests. Require same version line and explicit publisher compatibility metadata.
+- Dispatch immutable managed runtimes through an atomic pointer; serialize activation with EAG mutations and reader leases, defer busy activation, preserve earlier versions, and fall back to the baseline on integrity/import failure without replaying commands. Background maintenance never runs setup or grants new skill/MCP/hook permissions.
+- Document rollout, recovery and supply-chain limits; refresh manual-update hooks through the global entry rather than an old staged version.
+
 ## 0.12.0 — 2026-09-08
 
 - Stop automatic cross-agent skill adoption and deduplication. Setup, doctor and launch hooks no longer infer consent from an installed or shared-directory skill. Legacy `adopt skills` is diagnostic-only.

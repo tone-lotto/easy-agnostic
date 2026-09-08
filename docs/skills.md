@@ -1,5 +1,11 @@
 # Skill isolation and explicit sharing
 
+All six agent identities are supported. Cursor's native discovery can include Claude/Codex
+folders, and OpenCode's can include Claude folders. EAG requires approval for known indirect
+receivers before creating managed links, and reports native exposure without deleting unowned
+files. Installing an additional receiver may suspend previously approved owned links until
+review. See the [new agent integration guide](agents.md#skills-and-instruction-boundaries).
+
 Since 0.12.0, installing a personal skill in one agent is **not** permission to share
 it with another. `setup`, `adopt skills`, `doctor --fix` and launch hooks no longer
 move or link unreviewed personal skills. `adopt skills` is a diagnostic-only legacy
@@ -109,7 +115,7 @@ This moves only that source into the neutral library, replaces exact links to th
 source for allowed agents, and removes exact old links for excluded agents. Broken
 links, independent copies, symlinked source folders and vendor-owned skills stop
 migration. There is no bulk approval or automatic project-to-user promotion.
-`--from claude|codex|pi` similarly enrolls one agent-local directory; `--from library`
+`--from claude|codex|pi|cursor|antigravity|opencode` similarly enrolls one agent-local directory; `--from library`
 is for policy changes or reapproval. Cross-device moves fail without deleting data.
 
 ## Security boundaries and recovery

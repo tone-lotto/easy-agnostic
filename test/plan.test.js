@@ -346,14 +346,16 @@ test('a damaged managed block becomes a plan error instead of a throw', () => {
 
 test('project targets appear only where a project source exists', () => {
   reset();
-  assert.deepEqual(targetsForScope('all', PROJECT), ['claude-user', 'codex-user']);
+  const users = ['claude-user','codex-user','cursor-user','antigravity-user','opencode-user'];
+  const projects = ['codex-project','cursor-project','antigravity-project','opencode-project'];
+  assert.deepEqual(targetsForScope('all', PROJECT), users);
   assert.deepEqual(targetsForScope('project', PROJECT), []);
-  assert.deepEqual(targetsForScope('user', PROJECT), ['claude-user', 'codex-user']);
+  assert.deepEqual(targetsForScope('user', PROJECT), users);
 
   write(projMcp, json({ mcpServers: {} }));
-  assert.deepEqual(targetsForScope('all', PROJECT), ['claude-user', 'codex-user', 'codex-project']);
-  assert.deepEqual(targetsForScope('project', PROJECT), ['codex-project']);
-  assert.deepEqual(targetsForScope('user', PROJECT), ['claude-user', 'codex-user']);
+  assert.deepEqual(new Set(targetsForScope('all', PROJECT)), new Set([...users,...projects]));
+  assert.deepEqual(targetsForScope('project', PROJECT), projects);
+  assert.deepEqual(targetsForScope('user', PROJECT), users);
 });
 
 // Codex reads ~/.agents/skills itself, so a copy under ~/.codex/skills makes it list the

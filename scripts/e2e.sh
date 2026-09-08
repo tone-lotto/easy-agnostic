@@ -57,6 +57,7 @@ command -v claude >/dev/null 2>&1 || { echo "missing claude CLI on PATH: init en
 
 unset EAG_PROJECT   # project scope must resolve from cwd ($S/proj), never from the developer's shell
 export EAG_HOME="$S/agents" CLAUDE_CONFIG_DIR="$S/cc" CODEX_HOME="$S/codex" PI_CODING_AGENT_DIR="$S/pi" EAG_SECRET_SERVICE=eag-test
+export CURSOR_CONFIG_DIR="$S/cursor" ANTIGRAVITY_CONFIG_DIR="$S/antigravity" OPENCODE_CONFIG_DIR="$S/opencode"
 export EAG_SHELL_RC="$S/shellrc"   # doctor checks the `eval "$(eag env)"` line here, not in your real rc
 export EAG_NO_UPDATE=1             # apply checks the registry once a day; this run must stay offline
 BIN="$REPO/bin/eag.js"
@@ -432,6 +433,7 @@ if (ours.length !== 1) { console.error(`FAIL: expected exactly one eag SessionSt
 A mcp add e2e-gui --url https://example.com/gui >/dev/null
 out="$(env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME="$HOME" \
   EAG_HOME="$EAG_HOME" CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" CODEX_HOME="$CODEX_HOME" \
+  CURSOR_CONFIG_DIR="$CURSOR_CONFIG_DIR" ANTIGRAVITY_CONFIG_DIR="$ANTIGRAVITY_CONFIG_DIR" OPENCODE_CONFIG_DIR="$OPENCODE_CONFIG_DIR" \
   PI_CODING_AGENT_DIR="$PI_CODING_AGENT_DIR" EAG_SECRET_SERVICE="$EAG_SECRET_SERVICE" \
   EAG_SECRET_BACKEND="${EAG_SECRET_BACKEND:-}" \
   EAG_SHELL_RC="$EAG_SHELL_RC" /bin/sh "$EAG_HOME/bin/eag-sync" 2>&1)"
@@ -479,6 +481,7 @@ printf '@AGENTS.md\n\nClaude-only instructions\n' > "$SETUP_S/proj/CLAUDE.md"
 (
   cd "$SETUP_S/proj"
   export EAG_HOME="$SETUP_S/agents" CLAUDE_CONFIG_DIR="$SETUP_S/cc" CODEX_HOME="$SETUP_S/codex" PI_CODING_AGENT_DIR="$SETUP_S/pi" EAG_SECRET_SERVICE=eag-test
+  export CURSOR_CONFIG_DIR="$SETUP_S/cursor" ANTIGRAVITY_CONFIG_DIR="$SETUP_S/antigravity" OPENCODE_CONFIG_DIR="$SETUP_S/opencode"
   export EAG_SHELL_RC="$SETUP_S/shellrc"; : > "$EAG_SHELL_RC"
   set +e; out="$(A setup)"; rc=$?; set -e
   echo "$out"

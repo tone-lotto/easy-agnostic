@@ -3,6 +3,7 @@ import { loadSource, saveMcp, saveAgents, validateServer } from '../source.js';
 import { c, refsIn } from '../util.js';
 import { resolveSecret } from '../secrets.js';
 import { redactConfig } from '../redact.js';
+import { AGENTS } from '../agents.js';
 
 function list(flag) { return flag === undefined ? [] : [].concat(flag); }
 
@@ -95,11 +96,13 @@ export async function run(args, flags) {
 
   if (sub === 'target') {
     const [, name, agent, onoff] = args;
-    if (!name || !agent || !['on', 'off'].includes(onoff)) throw new Error('usage: eag mcp target <name> <claude|codex|pi> on|off [--scope]');
-    const agents = structuredClone(src.agents);
+    if (!name || !AGENTS.includes(agent) || !['on', 'off'].includes(onoff)) throw new Error(`usage: eag mcp target <name> <${AGENTS.join('|')}> on|off [--scope]`);
+    const agents = scope === 'project' && !src.hasAgents ? {servers:{}} : structuredClone(src.agents);
     agents.servers = Object.assign(Object.create(null), agents.servers); // a server named "toString" must not resolve through Object.prototype
     agents.servers[name] ||= {}; agents.servers[name].targets ||= {};
-    if (onoff === 'on') delete agents.servers[name].targets[agent]; else agents.servers[name].targets[agent] = false;
+    // Project 'on' must explicitly override an inherited 'off', not delete the
+    // override and silently continue inheriting the denial.
+    if (onoff === 'on' && scope === 'user') delete agents.servers[name].targets[agent]; else agents.servers[name].targets[agent] = onoff === 'on';
     if (!Object.keys(agents.servers[name].targets).length) delete agents.servers[name].targets;
     if (!Object.keys(agents.servers[name]).length) delete agents.servers[name];
     saveAgents(paths, agents);

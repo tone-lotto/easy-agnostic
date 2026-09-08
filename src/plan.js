@@ -1,9 +1,10 @@
 import { scopePaths, assertProjectScope } from './paths.js';
-import { loadSource, sourceGuard, targetEnabled, serverAllowed, serverOverrides, secretsMode, validateServer } from './source.js';
+import { loadSource, sourceGuard, targetEnabled, serverAllowed, serverOverrides, secretsMode, validateServer, mergeAgentPolicies } from './source.js';
 import { loadState, saveState } from './state.js';
 import { planMerge } from './merge.js';
 import * as codex from './adapters/codex.js';
 import * as claude from './adapters/claude.js';
+import { JSON_ADAPTERS } from './adapters/registry.js';
 import { exists, backup, deepEqual } from './util.js';
 import { withMutationLock } from './lock.js';
 import fs from 'node:fs';
@@ -13,6 +14,7 @@ export const TARGETS = {
   'claude-user': { agent: 'claude', scope: 'user', label: 'Claude Code · user (~/.claude.json)' },
   'codex-user': { agent: 'codex', scope: 'user', label: 'Codex · user (~/.codex/config.toml)' },
   'codex-project': { agent: 'codex', scope: 'project', label: 'Codex · project (.codex/config.toml)' },
+  ...Object.fromEntries(Object.keys(JSON_ADAPTERS).flatMap(agent => ['user','project'].map(scope => [`${agent}-${scope}`, {agent,scope,label:`${agent} · ${scope}`}]))),
 };
 
 export function targetsForScope(scope, root) {
@@ -24,15 +26,6 @@ export function targetsForScope(scope, root) {
   return ids.filter((id) => TARGETS[id].scope === 'user' || (!proj.collides && exists(proj.mcp)));
 }
 
-function mergeAgents(user, project) {
-  return {
-    targets: { ...(user.targets || {}), ...(project.targets || {}) },
-    servers: { ...(user.servers || {}), ...(project.servers || {}) },
-    claude: { ...(user.claude || {}), ...(project.claude || {}) },
-    codex: { ...(user.codex || {}), ...(project.codex || {}) },
-  };
-}
-
 export function buildPlan(targetId, { root, prefer = null, warn = () => {} } = {}) {
   const t = TARGETS[targetId];
   if (!t) throw new Error(`unknown target ${targetId}`);
@@ -42,7 +35,7 @@ export function buildPlan(targetId, { root, prefer = null, warn = () => {} } = {
   // A project without its own agents.json must not reset the user's switches: loadSource
   // hands back DEFAULT_AGENTS when the file is missing, and spreading those last would
   // re-enable an agent the user turned off machine-wide.
-  const agents = proj ? mergeAgents(user.agents, proj.hasAgents ? proj.agents : {}) : user.agents;
+  const agents = proj ? mergeAgentPolicies(user.agents, proj.hasAgents ? proj.agents : {}) : user.agents;
   const base = { targetId, ...t, root, agents };
   if (!targetEnabled(agents, t.agent)) return { ...base, skipped: `target "${t.agent}" is not enabled in agents.json` };
 
@@ -60,14 +53,14 @@ export function buildPlan(targetId, { root, prefer = null, warn = () => {} } = {
     if (errs.length) { errors.push(...errs); continue; }
     if (t.agent === 'claude') { const ne = claude.nameError(name); if (ne) { errors.push(ne); continue; } }
     try {
-      desired.set(name, t.agent === 'codex'
+      desired.set(name, JSON_ADAPTERS[t.agent] ? JSON_ADAPTERS[t.agent].render(name,src,{overrides:serverOverrides(agents,name,t.agent),secrets:secretsMode(agents,name,t.agent,'literal'),warn}) : t.agent === 'codex'
         ? codex.render(name, src, serverOverrides(agents, name, 'codex'), warn)
         : claude.render(name, src, { secrets: secretsMode(agents, name, 'claude', 'literal'), warn }));
     } catch (e) { errors.push(e.message); }
   }
   const stateDir = t.scope === 'user' ? user.paths.state : proj.paths.state;
   const state = loadState(stateDir, targetId).servers;
-  const native = t.agent === 'codex' ? codex.read(t.scope, root) : claude.read();
+  const native = JSON_ADAPTERS[t.agent] ? JSON_ADAPTERS[t.agent].read(t.scope,root,agents[t.agent]) : t.agent === 'codex' ? codex.read(t.scope, root) : claude.read();
   // Damaged markers make the managed region unknowable: refuse to plan rather than guess
   // which text belongs to eag. apply.js turns an error into "not applied", not a crash.
   if (native.damaged) errors.push(`${native.file}: ${native.damaged}`);
@@ -88,8 +81,9 @@ function applyPlanLocked(plan, { dryRun, backupDir }) {
   if (plan.errors?.length) throw new Error('refusing to apply a plan with validation errors');
   if (plan.scope === 'project') assertProjectScope(scopePaths('project', plan.root));
   plan.verifySource?.();
-  const freshNative = plan.agent === 'codex' ? codex.read(plan.scope, plan.root) : claude.read();
-  const unchanged = plan.agent === 'codex' ? freshNative.text === plan.native.text
+  const jsonAdapter = JSON_ADAPTERS[plan.agent];
+  const freshNative = jsonAdapter ? jsonAdapter.read(plan.scope,plan.root,plan.agents[plan.agent]) : plan.agent === 'codex' ? codex.read(plan.scope, plan.root) : claude.read();
+  const unchanged = plan.agent === 'codex' || jsonAdapter ? freshNative.text === plan.native.text
     : deepEqual([...freshNative.servers], [...plan.native.servers]);
   if (!unchanged || !deepEqual(loadState(plan.stateDir, plan.targetId).servers, plan.state)) throw new Error('configuration changed since planning; retry eag apply');
   const newState = Object.assign(Object.create(null), plan.state); // a server named __proto__ must become an own key
@@ -138,7 +132,9 @@ function applyPlanLocked(plan, { dryRun, backupDir }) {
   }
   const writes = plan.actions.filter((a) => ['create', 'update', 'delete'].includes(a.op));
   let result;
-  if (plan.agent === 'codex') {
+  if (jsonAdapter) {
+    result = jsonAdapter.write(plan.scope,plan.root,writes,{...plan.agents[plan.agent],backupDir:backupDir ?? backupDirFor(plan),dryRun,expectedText:plan.native.text});
+  } else if (plan.agent === 'codex') {
     const needsWrite = writes.length > 0 || !plan.native.hasBlock && entries.size > 0;
     if (needsWrite) result = codex.write(plan.scope, plan.root, entries, { backupDir, dryRun, expectedText: plan.native.text });
     else {

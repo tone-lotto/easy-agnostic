@@ -1,6 +1,6 @@
 import { inventory } from '../skills.js';
 import { projectRoot } from '../paths.js';
-import { share, syncLinks, AGENTS, readPolicies } from '../skill-policy.js';
+import { share, syncLinks, AGENTS, readPolicies, discoveryConsumers } from '../skill-policy.js';
 
 function agents(value, flag) {
   if (typeof value !== 'string') throw new Error(`--${flag} requires an explicit comma-separated agent list (or none)`);
@@ -42,10 +42,11 @@ export async function run(args, flags) {
     for (const s of skills) {
       if (!policies.has(s.scope)) policies.set(s.scope, readPolicies({scope:s.scope,root:projectRoot()}));
       s.approval = Object.hasOwn(policies.get(s.scope),s.name) ? policies.get(s.scope)[s.name] : null;
+      s.alsoDiscoverableBy = discoveryConsumers(s);
     }
     if (flags.json) console.log(JSON.stringify({ scope, skills }, null, 2));
     else if (!skills.length) console.log('no skills found');
-    else for (const s of skills) console.log(`${s.inherited ? 'inherited' : s.scope} ${s.origin} ${s.name}${s.broken ? ' [broken link]' : s.linked ? ' [link]' : ''}${s.conflict ? ' [conflict]' : ''}${s.sameNameInUserScope ? ' [also in user scope]' : ''}${s.approval ? ` [targets: ${s.approval.targets.join(',') || 'none'}; compatible: ${s.approval.compatible.join(',') || 'unknown'}]` : ' [no sharing approval]'} ${s.path}`);
+    else for (const s of skills) console.log(`${s.inherited ? 'inherited' : s.scope} ${s.origin} ${s.name}${s.broken ? ' [broken link]' : s.linked ? ' [link]' : ''}${s.conflict ? ' [conflict]' : ''}${s.sameNameInUserScope ? ' [also in user scope]' : ''}${s.approval ? ` [targets: ${s.approval.targets.join(',') || 'none'}; compatible: ${s.approval.compatible.join(',') || 'unknown'}]` : ' [no sharing approval]'}${s.alsoDiscoverableBy.length ? ` [native discovery: ${s.alsoDiscoverableBy.join(',')}]` : ''} ${s.path}`);
     return 0;
   } catch (e) {
     if (!flags.json) throw e;

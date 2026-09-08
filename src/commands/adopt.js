@@ -11,6 +11,7 @@ import { setSecret, resolveSecret, backendName } from '../secrets.js';
 import { deepEqual, looksLikeSecret, refsIn, c } from '../util.js';
 import * as claude from '../adapters/claude.js';
 import * as codex from '../adapters/codex.js';
+import { JSON_ADAPTERS } from '../adapters/registry.js';
 import { redactConfig } from '../redact.js';
 
 // `pat` only as a whole token: PATH, NODE_PATH or PATTERN are not credentials.
@@ -41,7 +42,7 @@ export async function run(args, flags) {
   const agent = args[0];
   if (flags['all-projects']) return allProjects(agent, flags);
   if (agent === 'skills') return adoptSkills(flags);
-  if (!['claude', 'codex'].includes(agent)) throw new Error('usage: eag adopt <claude|codex> [--scope user|project] [--dry-run] [--force]');
+  if (!['claude', 'codex', ...Object.keys(JSON_ADAPTERS)].includes(agent)) throw new Error('usage: eag adopt <claude|codex|cursor|antigravity|opencode> [--scope user|project] [--dry-run] [--force]');
   const scope = flags.scope || 'user';
   if (!['user', 'project'].includes(scope)) throw new Error(`--scope must be user or project (got "${scope}")`);
   const root = projectRoot();
@@ -54,7 +55,14 @@ export async function run(args, flags) {
   // 1. read what the agent has
   let incoming = new Map(); // name -> { entry, overrides, locked }
   let targetId = null;
-  if (agent === 'claude') {
+  if (JSON_ADAPTERS[agent]) {
+    const n = JSON_ADAPTERS[agent].read(scope,root);
+    for (const [name,obj] of n.servers) {
+      try { incoming.set(name,{...JSON_ADAPTERS[agent].toSource(obj),locked:false,native:obj}); }
+      catch { console.log(`${c.warn('skip   ')} ${name}: provider-specific settings need manual review; preserved`); }
+    }
+    targetId = `${agent}-${scope}`;
+  } else if (agent === 'claude') {
     if (scope === 'user') {
       const n = claude.read();
       for (const [name, obj] of n.servers) incoming.set(name, { entry: obj, overrides: {}, locked: false });
@@ -72,7 +80,7 @@ export async function run(args, flags) {
 
   // 2. merge into the source
   const servers = { ...src.servers };
-  const agents = structuredClone(src.agents);
+  const agents = scope === 'project' && !src.hasAgents ? {servers:{}} : structuredClone(src.agents);
   agents.servers ||= {};
   const stateUpdates = {};
   const secretsToSet = [];

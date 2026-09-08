@@ -1,9 +1,12 @@
 // Local JSONL adapters. Unknown record kinds, hidden reasoning, images and base
 // instructions are deliberately not exported. No vendor SDK is launched.
-export const VENDORS = ['claude', 'codex', 'pi', 'export'];
+export const VENDORS = ['claude', 'codex', 'pi', 'cursor', 'antigravity', 'opencode', 'export'];
+const imported = (vendor,x) => ['cursor','antigravity','opencode'].includes(vendor) && x.type === 'eag-history' && x.version === 1 && x.vendor === vendor;
 
 export function metadata(vendor, records) {
   for (const { data: x } of records) {
+    if (imported(vendor,x)) return {id:x.id,cwd:x.cwd,timestamp:x.timestamp,binding:x.binding,sourceSha256:x.sourceSha256};
+    if (['cursor','antigravity','opencode'].includes(vendor) && x.type === 'eag-history') throw new Error('imported transcript has mismatched vendor metadata');
     if (vendor === 'codex' && x.type === 'session_meta') return { id: x.payload?.id || x.payload?.session_id, cwd: x.payload?.cwd, timestamp: x.timestamp };
     if (vendor === 'claude' && x.sessionId && x.cwd && ['user', 'assistant'].includes(x.type)) return { id: x.sessionId, cwd: x.cwd, timestamp: x.timestamp };
     if (vendor === 'pi' && x.type === 'session' && [1, 2, 3].includes(x.version)) return { id: x.id, cwd: x.cwd, timestamp: x.timestamp };
@@ -52,9 +55,9 @@ export function events(vendor, records, { tools = false } = {}) {
         if (['tool_use', 'toolCall'].includes(c.type)) add(r, 'tool_call', JSON.stringify(c.input ?? c.arguments ?? {}), { ...branch, tool: c.name, callId: c.id });
         if (c.type === 'tool_result') add(r, 'tool_result', textContent(c.content), { ...branch, callId: c.tool_use_id, isError: !!c.is_error });
       }
-    } else if (vendor === 'export') {
+    } else if (['export','cursor','antigravity','opencode'].includes(vendor)) {
       if (x.type === 'eag-history') cwd = x.cwd;
-      if (x.type === 'message' && ['user', 'assistant', 'summary', ...(tools ? ['tool_call', 'tool_result'] : [])].includes(x.kind)) add(r, x.kind, x.text, { callId: x.callId, tool: x.tool });
+      if (x.type === 'message' && ['user', 'assistant', 'summary', ...(tools ? ['tool_call', 'tool_result'] : [])].includes(x.kind)) add(r, x.kind, x.text, { callId: x.callId, tool: x.tool, sourceLine:x.sourceLine,sourceRecord:x.sourceRecord });
     }
   }
   return out;
